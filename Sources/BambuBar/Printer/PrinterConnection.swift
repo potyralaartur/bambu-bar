@@ -199,9 +199,17 @@ final class PrinterConnection {
             lastMessage = Date()
             onHeartbeat?()
             guard let json = Self.decode(payload) else { return }
-            if let p = json["print"] as? [String: Any], let command = p["command"] as? String,
-               command != "push_status", let result = p["result"] as? String {
-                onAck?(command, result.lowercased() == "success", p["reason"] as? String)
+            if let p = json["print"] as? [String: Any], let command = p["command"] as? String, command != "push_status" {
+                // Some firmware answers a refused command with only `err_code` (0x05024007: not signed).
+                let error = ReportParser.int(p["err_code"]) ?? 0
+                if error != 0 {
+                    let e = UInt32(truncatingIfNeeded: error)
+                    let key = String(format: "%08X", e)
+                    let pretty = String(format: "%04X_%04X", e >> 16, e & 0xFFFF)
+                    onAck?(command, false, key == "05024007" ? "command verification failed" : HMSCatalog.shared.errorText(key) ?? "error \(pretty)")
+                } else if let result = p["result"] as? String {
+                    onAck?(command, result.lowercased() == "success", p["reason"] as? String)
+                }
             }
             guard document.apply(json) else { return }
             guard document.hasFullReport || document.print["gcode_state"] != nil else { return }

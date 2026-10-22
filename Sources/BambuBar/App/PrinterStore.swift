@@ -443,7 +443,7 @@ final class PrinterStore {
 
     private func acknowledged(_ session: PrinterSession, ok: Bool, reason: String?) {
         guard !ok else { return }
-        let detail = (reason ?? "").lowercased().contains("verify")
+        let detail = (reason ?? "").lowercased().contains("verif")
             ? "The printer only accepts commands in Developer Mode."
             : (reason.map { "The printer refused: \($0)" } ?? "The printer refused the command.")
         showToast(hasMultiplePrinters ? "\(session.config.name): \(detail)" : detail, error: true)
