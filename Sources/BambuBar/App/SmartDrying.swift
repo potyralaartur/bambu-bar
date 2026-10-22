@@ -98,7 +98,9 @@ struct SmartDryingSettings: Codable, Equatable {
 }
 
 /// Runs smart drying: watches each heated AMS and starts or stops its dryer by the person's rules.
-/// It acts only while Bambu Bar is running, and only ever stops cycles it started itself.
+/// It acts only while Bambu Bar is running, and only ever stops cycles it started itself. On printers whose
+/// firmware can't dry on command (the P1 series), it applies the same rules but only tells the person when to
+/// start and stop drying on the printer's screen.
 @MainActor
 @Observable
 final class SmartDrying {
@@ -118,6 +120,9 @@ final class SmartDrying {
     @ObservationIgnored private var lastEnded: [String: Date] = [:]
     @ObservationIgnored private var lastCommand: [String: Date] = [:]
     @ObservationIgnored private var refusedUntil: [String: Date] = [:]
+    /// Reminder mode: when the person was last told to start, and whether they were told to stop this cycle.
+    @ObservationIgnored private var remindedStart: [String: Date] = [:]
+    @ObservationIgnored private var remindedStop: Set<String> = []
     /// The unit each printer was last sent a drying command for, to match the acknowledgement.
     @ObservationIgnored private var lastCommandUnit: [String: String] = [:]
     @ObservationIgnored private let defaults = UserDefaults.standard
@@ -126,6 +131,8 @@ final class SmartDrying {
     static let sustain: TimeInterval = 10 * 60
     /// After any cycle the air needs time to settle before the reading means anything again.
     static let rest: TimeInterval = 60 * 60
+    /// A start reminder nobody acted on is repeated after this long.
+    static let remindAgain: TimeInterval = 12 * 60 * 60
     private static let commandSpacing: TimeInterval = 3 * 60
 
     private enum Keys {
@@ -213,7 +220,8 @@ final class SmartDrying {
                     onEvent?(session, "Smart drying finished", "\(unit.title) is at \(unit.humidity.map { "\($0)%" } ?? "?") humidity.")
                 }
             }
-            if drying && wasDrying[key] != true { aboveSince[key] = nil }
+            if drying && wasDrying[key] != true { aboveSince[key] = nil; remindedStart[key] = nil }
+            if !drying { remindedStop.remove(key) }
             wasDrying[key] = drying
 
             let rules = settings(session.id, unit: unit.id)
@@ -225,14 +233,25 @@ final class SmartDrying {
 
     private func decide(_ session: PrinterSession, status: PrinterStatus, unit: AMSUnit, key: String,
                         rules: SmartDryingSettings, drying: Bool, now: Date) -> String {
-        guard Self.canDryRemotely(status) else {
-            return "This printer's firmware doesn't take drying commands over the network."
-        }
-        if status.controlsLocked { return "Turn on LAN Only and Developer Mode on the printer so Bambu Bar can start drying." }
+        let remote = Self.canDryRemotely(status)
+        if remote && status.controlsLocked { return "Turn on LAN Only and Developer Mode on the printer so Bambu Bar can start drying." }
         guard let humidity = unit.humidity else { return "Waiting for a humidity reading from the AMS." }
         let recent = lastCommand[key].map { now.timeIntervalSince($0) < Self.commandSpacing } ?? false
         if let until = refusedUntil[key], until > now, let note = notes[key] { return note }
 
+        if drying && !remote {
+            guard humidity <= rules.stopAt else {
+                belowSince[key] = nil
+                return "Drying. Stop it on the printer once the humidity falls to \(rules.stopAt)% (now \(humidity)%)."
+            }
+            let since = belowSince[key] ?? now
+            belowSince[key] = since
+            if now.timeIntervalSince(since) >= 5 * 60, !remindedStop.contains(key) {
+                remindedStop.insert(key)
+                onEvent?(session, "\(unit.title) is dry", "Humidity is down to \(humidity)%. You can stop drying on the printer's screen.")
+            }
+            return "Humidity is down to \(humidity)%. You can stop drying on the printer."
+        }
         if drying {
             guard owned.contains(key) else {
                 return "Drying started outside smart drying. It's left to run its course."
@@ -268,6 +287,7 @@ final class SmartDrying {
         }
         guard humidity > rules.startAbove else {
             aboveSince[key] = nil
+            remindedStart[key] = nil
             return "Humidity is \(humidity)%. Drying starts above \(rules.startAbove)%."
         }
         let since = aboveSince[key] ?? now
@@ -284,7 +304,16 @@ final class SmartDrying {
         let waited = now.timeIntervalSince(since)
         guard waited >= Self.sustain else {
             let left = Int((Self.sustain - waited) / 60) + 1
-            return "Humidity is \(humidity)%. Starting if it stays above \(rules.startAbove)% for \(left) more min."
+            return "Humidity is \(humidity)%. \(remote ? "Starting" : "Reminding you") if it stays above \(rules.startAbove)% for \(left) more min."
+        }
+        if !remote {
+            let plan = DryingPlan.recommended(for: unit, rotateSpools: false)
+            if remindedStart[key].map({ now.timeIntervalSince($0) >= Self.remindAgain }) ?? true {
+                remindedStart[key] = now
+                onEvent?(session, "Time to dry \(unit.title)",
+                         "Humidity is \(humidity)%. Start drying on the printer's screen; \(plan.summary) suits what's loaded.")
+            }
+            return "Humidity is \(humidity)%. Time to dry: start it on the printer's screen (\(plan.summary))."
         }
         guard !recent else { return "Starting…" }
         start(session, unit: unit, smart: true)

@@ -44,12 +44,12 @@ struct DryingPanel: View {
                 }
             }
             if !remote {
-                Text("This printer's firmware doesn't take drying commands over the network yet, so drying has to be started on its screen. Bambu Bar still shows the time left.")
+                Text("This printer's firmware doesn't take drying commands over the network yet, so drying has to be started on its screen. Bambu Bar shows the time left, and smart drying can remind you when to dry.")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
-            SmartDryingRules(session: session, unit: unit, enabled: remote)
+            SmartDryingRules(session: session, unit: unit, remote: remote)
         }
         .panel(radius: 16, padding: 14, tint: drying ? Palette.bed : nil)
     }
@@ -79,12 +79,13 @@ struct DryingPanel: View {
     }
 }
 
-/// Smart drying: start above one humidity, stop at another, optionally only in set hours.
+/// Smart drying: start above one humidity, stop at another, optionally only in set hours. Where the printer can't
+/// dry on command, the same rules send reminders instead.
 private struct SmartDryingRules: View {
     @Environment(PrinterStore.self) private var store
     var session: PrinterSession
     var unit: AMSUnit
-    var enabled: Bool
+    var remote: Bool
 
     var body: some View {
         let rules = store.drying.settings(session.id, unit: unit.id)
@@ -92,7 +93,8 @@ private struct SmartDryingRules: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Smart drying").font(.system(size: 12.5, weight: .semibold))
-                    Text("Keeps the humidity in range on its own while Bambu Bar is running.")
+                    Text(remote ? "Keeps the humidity in range on its own while Bambu Bar is running."
+                                : "Tells you when to start and stop drying on the printer, while Bambu Bar is running.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -122,10 +124,16 @@ private struct SmartDryingRules: View {
                     }
                 }
                 toggle("Also while printing", binding(\.whilePrinting))
-                toggle("Turn the spools", binding(\.rotateSpools))
-                Text("Turning helps the spools dry evenly. Pull the filament back out of the feeders first, or the printer won't start.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if remote {
+                    toggle("Turn the spools", binding(\.rotateSpools))
+                    Text("Turning helps the spools dry evenly. Pull the filament back out of the feeders first, or the printer won't start.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !store.notifyDrying {
+                    Label("Reminders need the smart drying notifications, which are off in Settings.", systemImage: "bell.slash")
+                        .font(.system(size: 11.5)).foregroundStyle(Palette.paused)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 if let note = store.drying.notes[SmartDrying.key(session.id, unit.id)] {
                     Label(note, systemImage: "info.circle")
@@ -135,8 +143,6 @@ private struct SmartDryingRules: View {
                 }
             }
         }
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.5)
     }
 
     private func binding<T>(_ path: WritableKeyPath<SmartDryingSettings, T>) -> Binding<T> {

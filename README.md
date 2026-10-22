@@ -76,7 +76,7 @@ The Filament page has a drying card under each AMS 2 Pro and AMS HT. **Start Dry
 - It waits for prints to finish unless you allow drying while printing, and rests an hour after each cycle so the reading can settle.
 - It never stops a cycle you started yourself.
 
-Drying commands need **LAN Only** with **Developer Mode** like the other controls, and firmware that takes remote drying, the same feature Bambu Studio 2.5 uses on its Device page (recent H2 and P2S firmware has it). The printer says whether it does in its report (`fun2`); without it the card only shows the time left and drying has to be started on the printer's screen. `defaults write dev.rolottr.BambuBar forceRemoteDrying -bool YES` sends the commands anyway, for testing other firmware.
+Drying commands need **LAN Only** with **Developer Mode** like the other controls, and firmware that takes remote drying, the same feature Bambu Studio 2.5 uses on its Device page (recent H2 and P2S firmware has it). The printer says whether it does in its report (`fun2`); without it (the P1 series on 01.10.00.00, for one) the card shows the time left, drying has to be started on the printer's screen, and smart drying turns into reminders: the same rules send a notification when it's time to start drying and when the humidity is low enough to stop. `defaults write dev.rolottr.BambuBar forceRemoteDrying -bool YES` sends the commands anyway, for testing other firmware.
 
 ## Desktop widgets
 
