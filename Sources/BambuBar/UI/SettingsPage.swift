@@ -92,7 +92,9 @@ struct SettingsPage: View {
                             ForEach(store.sessions) { Text($0.config.name).tag(Optional($0.id)) }
                         }
                         .labelsHidden()
-                        .frame(width: 220)
+                        // A pop-up button only takes the width its title needs and would sit centred in a fixed
+                        // frame, short of the right edge where the switches end.
+                        .fixedSize()
                     }
                     if store.menuBarSerial == nil {
                         Text("Automatic shows whichever printer is busy (paused first, then printing), otherwise the one you last looked at.")
@@ -105,7 +107,9 @@ struct SettingsPage: View {
                         ForEach(MenuBarStyle.allCases) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
-                    .frame(width: 220)
+                    // A pop-up button only takes the width its title needs and would sit centred in a fixed
+                    // frame, short of the right edge where the switches end.
+                    .fixedSize()
                 }
                 row("Open at login") {
                     Toggle("", isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
