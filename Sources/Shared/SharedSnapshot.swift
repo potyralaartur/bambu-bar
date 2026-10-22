@@ -106,11 +106,12 @@ extension PrinterStatus {
         s.doorOpen = false
         s.wifiSignal = -52
         s.ams = [AMSUnit(id: 0, kind: .pro2, humidity: 16, humidityLevel: 1, temperature: 28.4, dryingMinutesLeft: 0, spools: [
-            Spool(id: 0, unit: 0, slot: 0, material: "PLA", name: "PLA Matte", color: "F4EEE6FF", colors: ["F4EEE6FF"], remain: 81, isLoaded: true, isBambu: true),
-            Spool(id: 1, unit: 0, slot: 1, material: "PLA", name: "PLA Basic", color: "1C1C1EFF", colors: ["1C1C1EFF"], remain: 39, isLoaded: true, isBambu: true),
-            Spool(id: 2, unit: 0, slot: 2, material: "PETG", name: "PETG HF", color: "2E7D5BFF", colors: ["2E7D5BFF"], remain: 64, isLoaded: true, isBambu: true),
-            Spool(id: 3, unit: 0, slot: 3, material: "PLA", name: "PLA Silk+", color: "E2763AFF", colors: ["E2763AFF"], remain: 22, isLoaded: true, isBambu: true),
-        ])]
+            Spool(id: 0, unit: 0, slot: 0, material: "PLA", name: "PLA Matte", color: "F4EEE6FF", colors: ["F4EEE6FF"], remain: 81, isLoaded: true, isBambu: true, dryingTemp: 55, dryingHours: 8),
+            Spool(id: 1, unit: 0, slot: 1, material: "PLA", name: "PLA Basic", color: "1C1C1EFF", colors: ["1C1C1EFF"], remain: 39, isLoaded: true, isBambu: true, dryingTemp: 55, dryingHours: 8),
+            Spool(id: 2, unit: 0, slot: 2, material: "PETG", name: "PETG HF", color: "2E7D5BFF", colors: ["2E7D5BFF"], remain: 64, isLoaded: true, isBambu: true, dryingTemp: 65, dryingHours: 8),
+            Spool(id: 3, unit: 0, slot: 3, material: "PLA", name: "PLA Silk+", color: "E2763AFF", colors: ["E2763AFF"], remain: 22, isLoaded: true, isBambu: true, dryingTemp: 55, dryingHours: 8),
+        ], dryingPhase: .off, dryingBlockers: [])]
+        s.supportsRemoteDrying = true
         s.activeSpoolID = 3
         s.firmware = "01.03.00.00"
         s.nozzleDiameter = 0.4

@@ -90,6 +90,9 @@ struct Spool: Codable, Equatable, Identifiable, Sendable {
     var remain: Int?
     var isLoaded: Bool
     var isBambu: Bool
+    /// Drying temperature (°C) and time (hours) from the spool's RFID tag; nil for spools without one.
+    var dryingTemp: Int? = nil
+    var dryingHours: Int? = nil
 
     static let externalID = 254
 
@@ -120,6 +123,66 @@ enum AMSKind: String, Codable, Sendable {
         case .ht: return "AMS HT"
         }
     }
+
+    /// Only the heated units can dry filament.
+    var canDry: Bool { self == .pro2 || self == .ht }
+
+    /// The drying temperatures the unit accepts, as Bambu Studio limits them.
+    var dryingTemps: ClosedRange<Int> { self == .ht ? 45...85 : 45...65 }
+}
+
+/// What the AMS dryer is doing (bits 4-7 of the unit's `info`, on firmware with remote drying).
+enum DryingPhase: Int, Codable, Sendable {
+    case off = 0, checking, drying, cooling, stopping, error, heaterFault, testing
+
+    var title: String {
+        switch self {
+        case .off: return "Not drying"
+        case .checking: return "Starting"
+        case .drying: return "Drying"
+        case .cooling: return "Cooling down"
+        case .stopping: return "Stopping"
+        case .error: return "Drying error"
+        case .heaterFault: return "Heater fault"
+        case .testing: return "Self-test"
+        }
+    }
+
+    /// The heater is on, or should be turned off.
+    var isActive: Bool { self == .checking || self == .drying || self == .error || self == .heaterFault }
+}
+
+/// Why the printer won't start drying right now (`dry_sf_reason`).
+enum DryingBlocker: Int, Codable, Sendable {
+    case printing = 0, lowPower, amsBusy, filamentInFeeder, starting, laserMode, alreadyDrying, updating
+    case needsPowerAdapter = 8
+    case unloadByHand = 10
+    case unknown = -1
+
+    init(code: Int) { self = DryingBlocker(rawValue: code) ?? .unknown }
+
+    var message: String {
+        switch self {
+        case .printing: return "The printer is busy with a job."
+        case .lowPower: return "Not enough power to heat the AMS."
+        case .amsBusy: return "The AMS is busy."
+        case .filamentInFeeder: return "Filament is still in the AMS outlet. Unload it first."
+        case .starting: return "The AMS is already starting to dry."
+        case .laserMode: return "Drying isn't available with the laser or cutter module."
+        case .alreadyDrying: return "The AMS is already drying."
+        case .updating: return "The printer is updating its firmware."
+        case .needsPowerAdapter: return "Plug in the AMS power adapter to dry."
+        case .unloadByHand: return "Filament is at the AMS outlet. Pull it out by hand first."
+        case .unknown: return "The printer can't dry right now."
+        }
+    }
+}
+
+/// The cycle the AMS was last told to run (`dry_setting`).
+struct DryingSetting: Codable, Equatable, Sendable {
+    var filament: String
+    var temperature: Int
+    var hours: Int
 }
 
 struct AMSUnit: Codable, Equatable, Identifiable, Sendable {
@@ -132,6 +195,13 @@ struct AMSUnit: Codable, Equatable, Identifiable, Sendable {
     var temperature: Double?
     var dryingMinutesLeft: Int
     var spools: [Spool]
+    /// Reported only by firmware that supports remote drying.
+    var dryingPhase: DryingPhase? = nil
+    var dryingSetting: DryingSetting? = nil
+    var dryingBlockers: [DryingBlocker]? = nil
+
+    /// The dryer is running: by its phase where reported, else by the time left.
+    var isDrying: Bool { dryingPhase.map(\.isActive) ?? (dryingMinutesLeft > 0) }
 
     /// "AMS A", "AMS 2 Pro B"…
     var title: String {
@@ -191,6 +261,8 @@ struct PrinterStatus: Codable, Equatable, Sendable {
     var issues: [PrinterIssue] = []
     /// The printer refuses unsigned print commands (Developer Mode off).
     var controlsLocked: Bool = false
+    /// The firmware takes `ams_filament_drying` over the network (`fun2` bit 5).
+    var supportsRemoteDrying: Bool? = nil
     var firmware: String?
     var nozzleDiameter: Double?
     var nozzleType: String?

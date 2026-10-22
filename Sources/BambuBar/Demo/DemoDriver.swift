@@ -121,6 +121,7 @@ final class DemoDriver {
 
     private func advance() {
         tick += 1
+        advanceDrying()
         if status.state == .preparing {
             status.nozzle.current = min(status.nozzle.target, status.nozzle.current + 9)
             if status.nozzle.isAtTarget { status.state = .printing; status.stageID = 0 }
@@ -144,6 +145,38 @@ final class DemoDriver {
     func stop() { status.state = .failed; status.stageID = 255; status.issues = []; onStatus?(status, true) }
     func setLight(_ on: Bool) { status.chamberLightOn = on; emit() }
     func setSpeed(_ level: SpeedLevel) { status.speed = level; emit() }
+
+    func startDrying(_ plan: DryingPlan, unit: Int) {
+        guard let i = status.ams.firstIndex(where: { $0.id == unit }) else { return }
+        status.ams[i].dryingPhase = .drying
+        status.ams[i].dryingMinutesLeft = plan.hours * 60
+        status.ams[i].dryingSetting = DryingSetting(filament: plan.filament, temperature: plan.temperature, hours: plan.hours)
+        emit()
+        // The dryer needs the clock running even when no print is.
+        if timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.advance() }
+            }
+        }
+    }
+
+    func stopDrying(unit: Int) {
+        guard let i = status.ams.firstIndex(where: { $0.id == unit }) else { return }
+        status.ams[i].dryingPhase = .off
+        status.ams[i].dryingMinutesLeft = 0
+        emit()
+    }
+
+    /// A drying AMS warms up and its humidity falls, a little every tick.
+    private func advanceDrying() {
+        for i in status.ams.indices where status.ams[i].dryingPhase == .drying {
+            let target = Double(status.ams[i].dryingSetting?.temperature ?? 55)
+            status.ams[i].temperature = min(target, (status.ams[i].temperature ?? 25) + 2)
+            if tick % 3 == 0, let h = status.ams[i].humidity { status.ams[i].humidity = max(3, h - 1) }
+            status.ams[i].dryingMinutesLeft = max(0, status.ams[i].dryingMinutesLeft - 1)
+            if status.ams[i].dryingMinutesLeft == 0 { status.ams[i].dryingPhase = .off }
+        }
+    }
 
     static func sampleHistory(for serials: [String]) -> [JobRecord] {
         let now = Date()

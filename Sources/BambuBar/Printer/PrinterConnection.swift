@@ -130,6 +130,18 @@ final class PrinterConnection {
     func stopPrint() { sendPrint(["command": "stop"]) }
     func setSpeed(_ level: SpeedLevel) { sendPrint(["command": "print_speed", "param": "\(level.rawValue)"]) }
 
+    /// Starts (or retunes) the AMS dryer, as Bambu Studio's Device page does. `filament` is the material type.
+    func startDrying(_ plan: DryingPlan, unit: Int) {
+        sendPrint(["command": "ams_filament_drying", "ams_id": unit, "mode": 1, "filament": plan.filament,
+                   "temp": plan.temperature, "duration": plan.hours, "humidity": 0, "rotate_tray": plan.rotateSpools,
+                   "cooling_temp": plan.coolingTemperature, "close_power_conflict": false])
+    }
+
+    func stopDrying(unit: Int) {
+        sendPrint(["command": "ams_filament_drying", "ams_id": unit, "mode": 0, "filament": "", "temp": 0,
+                   "duration": 0, "humidity": 0, "rotate_tray": false, "cooling_temp": 0, "close_power_conflict": false])
+    }
+
     func setChamberLight(_ on: Bool) {
         send(["system": ["command": "ledctrl", "led_node": "chamber_light", "led_mode": on ? "on" : "off",
                          "led_on_time": 500, "led_off_time": 500, "loop_times": 0, "interval_time": 0]], key: "system")

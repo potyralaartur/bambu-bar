@@ -37,6 +37,8 @@ final class PrinterStore {
     /// A short-lived message after a command ("The printer refused…").
     private(set) var toast: Toast?
     private(set) var isDemo = false
+    /// Smart drying rules and their state for every heated AMS.
+    let drying = SmartDrying()
 
     /// `nil` = automatic.
     var menuBarSerial: String? {
@@ -49,6 +51,7 @@ final class PrinterStore {
     var notifyFailed: Bool { didSet { defaults.set(notifyFailed, forKey: Keys.notifyFailed); requestNotificationsIfNeeded() } }
     var notifyPaused: Bool { didSet { defaults.set(notifyPaused, forKey: Keys.notifyPaused); requestNotificationsIfNeeded() } }
     var notifyStarted: Bool { didSet { defaults.set(notifyStarted, forKey: Keys.notifyStarted); requestNotificationsIfNeeded() } }
+    var notifyDrying: Bool { didSet { defaults.set(notifyDrying, forKey: Keys.notifyDrying); requestNotificationsIfNeeded() } }
     var confirmStop: Bool { didSet { defaults.set(confirmStop, forKey: Keys.confirmStop) } }
 
     struct Toast: Equatable, Identifiable {
@@ -65,6 +68,7 @@ final class PrinterStore {
     private var lastSavedKey = ""
     private var lastWidgetKey = ""
     private var toastTask: Task<Void, Never>?
+    private var dryingTimer: Timer?
     private var insecureTLS = CommandLine.arguments.contains("--insecure-tls")
 
     static var developerConnection: (host: String, serial: String, code: String)? {
@@ -83,6 +87,7 @@ final class PrinterStore {
         static let notifyFailed = "notifyFailed"
         static let notifyPaused = "notifyPaused"
         static let notifyStarted = "notifyStarted"
+        static let notifyDrying = "notifyDrying"
         static let confirmStop = "confirmStop"
     }
 
@@ -92,6 +97,7 @@ final class PrinterStore {
         notifyFailed = defaults.object(forKey: Keys.notifyFailed) as? Bool ?? true
         notifyPaused = defaults.object(forKey: Keys.notifyPaused) as? Bool ?? true
         notifyStarted = defaults.object(forKey: Keys.notifyStarted) as? Bool ?? false
+        notifyDrying = defaults.object(forKey: Keys.notifyDrying) as? Bool ?? true
         confirmStop = defaults.object(forKey: Keys.confirmStop) as? Bool ?? true
         menuBarSerial = defaults.string(forKey: Keys.menuBarPrinter)
         selectedSerial = defaults.string(forKey: Keys.selected)
@@ -101,6 +107,18 @@ final class PrinterStore {
 
     func start() {
         discovery.onFound = { [weak self] printer in self?.found(printer) }
+        drying.onEvent = { [weak self] session, title, body in
+            guard let self, self.notifyDrying, !self.isDemo else { return }
+            self.notifier.post(title: (self.hasMultiplePrinters ? "\(session.config.name): " : "") + title, body: body,
+                               id: "drying.\(session.id)")
+        }
+        // Drying hours begin and end on the clock, not on a report.
+        dryingTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for session in self.sessions { self.drying.evaluate(session) }
+            }
+        }
 
         if let scenario = DemoDriver.requestedScenario {
             startDemo(scenario)
@@ -135,6 +153,7 @@ final class PrinterStore {
     }
 
     func stop() {
+        dryingTimer?.invalidate()
         for session in sessions { session.stop() }
         discovery.stop()
     }
@@ -168,9 +187,13 @@ final class PrinterStore {
         }
         session.onStatus = { [weak self] session, old, new, canceled in
             self?.trackJob(session, from: old, to: new, canceled: canceled)
+            self?.drying.evaluate(session)
             self?.writeSnapshot(force: old?.state != new.state)
         }
-        session.onAck = { [weak self] session, command, ok, reason in self?.acknowledged(session, ok: ok, reason: reason) }
+        session.onAck = { [weak self] session, command, ok, reason in
+            if command == "ams_filament_drying", !ok { self?.drying.refused(session, reason: reason) }
+            self?.acknowledged(session, ok: ok, reason: reason)
+        }
         session.onHeartbeat = { [weak self] _ in
             // A quiet, unchanging printer is still alive; keep the widget's snapshot from looking stale.
             guard let self, Date().timeIntervalSince(self.lastSnapshotWrite) > 300 else { return }
@@ -381,6 +404,30 @@ final class PrinterStore {
         current.setSpeed(level)
     }
 
+    // MARK: - AMS drying
+
+    /// Starts the unit's dryer with the recipe from its spools' RFID tags.
+    func startDrying(_ unit: AMSUnit, on session: PrinterSession? = nil) {
+        guard let session = session ?? current, ensureControllable(session), ensureCanDry(session) else { return }
+        drying.start(session, unit: unit, smart: false)
+        let plan = DryingPlan.recommended(for: unit, rotateSpools: drying.settings(session.id, unit: unit.id).rotateSpools)
+        showToast("Drying \(unit.title) at \(plan.summary)…")
+    }
+
+    func stopDrying(_ unit: AMSUnit, on session: PrinterSession? = nil) {
+        guard let session = session ?? current, ensureControllable(session), ensureCanDry(session) else { return }
+        drying.stop(session, unit: unit)
+        showToast("Stopping the dryer in \(unit.title)…")
+    }
+
+    private func ensureCanDry(_ session: PrinterSession) -> Bool {
+        guard let status = session.status, SmartDrying.canDryRemotely(status) else {
+            showToast("This printer's firmware doesn't take drying commands over the network. Start drying on its screen.", error: true)
+            return false
+        }
+        return true
+    }
+
     /// Print commands need the printer in Developer Mode; say so instead of sending something it will refuse.
     private func ensureControllable(_ session: PrinterSession) -> Bool {
         if session.status?.controlsLocked == true {
@@ -493,7 +540,7 @@ final class PrinterStore {
     }
 
     private func requestNotificationsIfNeeded() {
-        if notifyFinished || notifyFailed || notifyPaused || notifyStarted { notifier.requestAuthorization() }
+        if notifyFinished || notifyFailed || notifyPaused || notifyStarted || notifyDrying { notifier.requestAuthorization() }
     }
 
     // MARK: - Widget
