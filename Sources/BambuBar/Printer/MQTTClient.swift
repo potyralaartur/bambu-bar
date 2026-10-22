@@ -141,7 +141,7 @@ final class MQTTClient {
         }
     }
 
-    private static func describe(_ error: NWError) -> String {
+    static func describe(_ error: NWError) -> String {
         switch error {
         case .posix(let code):
             switch code {

@@ -128,7 +128,11 @@ final class PrinterStore {
             // `--connect <host> <serial> <code>`: a throwaway session (the local emulator, a borrowed printer).
             // Nothing is saved: not the printer, not the access code, not the history.
             isDemo = true
-            let session = add(PrinterConfig(host: dev.host, serial: dev.serial, name: "P2S Emulator", modelCode: "N7"))
+            // `--model <code>` (SSDP code, e.g. C12 for a P1S) picks the drawing and camera transport; default P2S.
+            let args = CommandLine.arguments
+            let model = args.firstIndex(of: "--model").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "N7"
+            let name = model == "N7" ? "P2S Emulator" : PrinterModels.name(for: model, serial: dev.serial)
+            let session = add(PrinterConfig(host: dev.host, serial: dev.serial, name: name, modelCode: model))
             session.start(accessCode: dev.code, insecure: insecureTLS)
             writeSnapshot(force: true)
             return

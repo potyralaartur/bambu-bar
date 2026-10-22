@@ -32,6 +32,10 @@ final class PrinterSession: Identifiable {
     @ObservationIgnored private var demo: DemoDriver?
     @ObservationIgnored private var insecure = false
     @ObservationIgnored private var pendingTask: Task<Void, Never>?
+    /// The code the connection is using (with `--connect` it never reaches the Keychain).
+    @ObservationIgnored private var activeCode: String?
+    /// The printer's camera; streams only while a view shows it.
+    @ObservationIgnored private(set) var camera: CameraFeed!
 
     init(config: PrinterConfig) {
         id = config.serial
@@ -49,6 +53,7 @@ final class PrinterSession: Identifiable {
             if self.lastHeard.map({ Date().timeIntervalSince($0) >= 1 }) ?? true { self.lastHeard = Date() }
             self.onHeartbeat?(self)
         }
+        camera = CameraFeed(session: self)
     }
 
     // MARK: - Lifecycle
@@ -58,6 +63,7 @@ final class PrinterSession: Identifiable {
         fallbackCodes = alternatives.filter { $0 != accessCode }
         status = nil
         hasBaseline = false
+        activeCode = accessCode
         connection.start(config, accessCode: accessCode, insecure: insecure)
     }
 
@@ -76,6 +82,7 @@ final class PrinterSession: Identifiable {
     }
 
     func stop() {
+        camera.stop()
         connection.stop()
         phase = .idle
     }
@@ -85,7 +92,9 @@ final class PrinterSession: Identifiable {
     /// Reconnects with the stored code, e.g. after the printer moved to a new IP address.
     func restart() {
         guard demo == nil, let code = Keychain.accessCode(for: config.serial) else { return }
+        activeCode = code
         connection.start(config, accessCode: code, insecure: insecure)
+        camera.restart()
     }
 
     // MARK: - Derived
@@ -96,6 +105,10 @@ final class PrinterSession: Identifiable {
     var speed: SpeedLevel { pendingSpeed ?? status?.speed ?? .standard }
     func isDrying(_ unit: AMSUnit) -> Bool { pendingDrying[unit.id] ?? unit.isDrying }
     var accessCode: String? { Keychain.accessCode(for: config.serial) }
+    var isDemo: Bool { demo != nil }
+    var allowsInsecureTLS: Bool { insecure }
+    var cameraTransport: CameraTransport { CameraTransport.forModel(config.modelName) }
+    var cameraAccessCode: String? { activeCode ?? accessCode }
 
     var linkSummary: String {
         switch phase {
@@ -172,12 +185,14 @@ final class PrinterSession: Identifiable {
             // Try the slicer's other stored code before telling anyone.
             let next = fallbackCodes.removeFirst()
             Keychain.setAccessCode(next, for: config.serial)
+            activeCode = next
             connection.start(config, accessCode: next, insecure: insecure)
             return
         }
         if phase == .online { fallbackCodes = [] }
         self.phase = phase
         onPhase?(self, phase)
+        camera.update()
     }
 
     private func received(_ new: PrinterStatus, canceled: Bool) {
@@ -189,5 +204,7 @@ final class PrinterSession: Identifiable {
         for unit in new.ams where pendingDrying[unit.id] == unit.isDrying { pendingDrying[unit.id] = nil }
         onStatus?(self, old, new, canceled)
         hasBaseline = true
+        // The camera stays on for the whole of a print.
+        if old?.state.isActive != new.state.isActive { camera.update() }
     }
 }
