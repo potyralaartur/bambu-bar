@@ -111,7 +111,7 @@ struct SettingsPage: View {
                             ForEach(store.sessions) { Text($0.config.name).tag(Optional($0.id)) }
                         }
                         .labelsHidden()
-                        .frame(width: 220)
+                        .fixedSize()
                     }
                     if store.menuBarSerial == nil {
                         Text("Automatic shows whichever printer is busy (paused first, then printing), otherwise the one you last looked at.")
