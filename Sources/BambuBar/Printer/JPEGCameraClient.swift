@@ -11,7 +11,7 @@ final class JPEGCameraClient: CameraClient {
     private let config: CameraConfig
     private let queue = DispatchQueue(label: "dev.rolottr.BambuBar.camera.jpeg")
     private var socket: CameraSocket?
-    private var buffer: [UInt8] = []
+    private var reader = JPEGFrameReader()
     private var frames = 0
     private var lastFrame = Date()
     private var watchdog: DispatchSourceTimer?
@@ -73,17 +73,8 @@ final class JPEGCameraClient: CameraClient {
     }
 
     private func received(_ data: Data) {
-        buffer.append(contentsOf: data)
-        var offset = 0
-        while buffer.count - offset >= 16 {
-            let size = Int(buffer[offset]) | Int(buffer[offset + 1]) << 8 | Int(buffer[offset + 2]) << 16
-            guard size > 0, size < 16 << 20 else { return finish(.malformed("frame header")) }
-            guard buffer.count - offset >= 16 + size else { break }
-            let jpeg = Data(buffer[(offset + 16)..<(offset + 16 + size)])
-            offset += 16 + size
-            decode(jpeg)
-        }
-        if offset > 0 { buffer.removeFirst(offset) }
+        guard let jpegs = reader.append(data) else { return finish(.malformed("frame header")) }
+        jpegs.forEach(decode)
     }
 
     private func decode(_ jpeg: Data) {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// `--demo [scenario] [--fleet]`: a simulated P2S (plus an X1C and an A1 with `--fleet`), for screenshots and
+/// `--demo [scenario] [--fleet]`: a simulated P2S (plus five more printers with `--fleet`), for screenshots and
 /// for trying the app without a printer. Nothing is saved and no network is touched.
 @MainActor
 final class DemoDriver {
@@ -29,19 +29,49 @@ final class DemoDriver {
         switch variant {
         case 1:
             status.jobName = "Gridfinity Baseplate 4x4"
-            status.ams[0].spools[0].color = "3A6EA5FF"; status.ams[0].spools[0].name = "PETG Translucent"; status.ams[0].spools[0].material = "PETG"
+            status.ams[0].spools[0].recolor("DE4343", name: "Scarlet Red", product: "PLA Matte", preset: "GFA01")
             status.ams[0].kind = .ams
             status.activeSpoolID = 0
+            status.externalSpool = nil
         case 2:
             status.jobName = "Articulated Dragon"
             status.ams[0].kind = .lite
-            status.ams[0].spools[1].color = "8E44ADFF"; status.ams[0].spools[1].name = "PLA Silk+"
+            status.ams[0].spools[1].recolor("8671CB", name: "Purple", product: "PLA Silk+", preset: "GFA06")
             status.activeSpoolID = 1
             status.progress = 31
             status.layer = 88
             status.totalLayers = 284
             status.remainingMinutes = 147
             status.chamber = nil
+            status.externalSpool = nil
+        case 3:
+            status.jobName = "Two-tone Vase"
+            status.ams[0].spools[0].recolor("FFFFFF", name: "Jade White", product: "PLA Basic", preset: "GFA00")
+            status.ams[0].spools[1].recolor("00AE42", name: "Bambu Green", product: "PLA Basic", preset: "GFA00")
+            status.activeSpoolID = 1
+            status.progress = 44
+            status.layer = 132
+            status.totalLayers = 300
+            status.remainingMinutes = 188
+            status.secondNozzle = Temperature(current: 170, target: 170)
+            status.chamber = 41
+        case 4:
+            status.jobName = "Keychain Batch"
+            status.ams[0].kind = .lite
+            status.ams[0].spools[3].recolor("E8AFCF", name: "Sakura Pink", product: "PLA Matte", preset: "GFA01")
+            status.activeSpoolID = 3
+            status.chamber = nil
+            status.externalSpool = nil
+        case 5:
+            status.jobName = "Cable Clips x24"
+            status.ams[0].kind = .ams
+            status.ams[0].spools[2].recolor("0056B8", name: "Cobalt Blue", product: "PLA Basic", preset: "GFA00")
+            status.activeSpoolID = 2
+            status.progress = 83
+            status.layer = 166
+            status.totalLayers = 200
+            status.remainingMinutes = 18
+            status.externalSpool = nil
         default:
             break
         }
@@ -199,5 +229,21 @@ final class DemoDriver {
             job.printerSerial = serials.isEmpty ? nil : serials[index % serials.count]
             return job
         }
+    }
+}
+
+private extension Spool {
+    /// A Bambu Lab spool of another colour, as its tag would report it.
+    mutating func recolor(_ hex: String, name colorName: String, product: String, preset: String) {
+        color = hex + "FF"
+        colors = [color]
+        self.colorName = colorName
+        name = product
+        material = "PLA"
+        self.preset = preset
+        brand = "Bambu Lab"
+        isBambu = true
+        weight = 1000
+        if remain == nil { remain = 72 }
     }
 }

@@ -10,7 +10,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.0.0"
+    MARKETING_VERSION: "1.1.1"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: PCZ6F8Q9DZ
     APP_GROUP: "$(DEVELOPMENT_TEAM).dev.rolottr.BambuBar"
@@ -34,6 +34,10 @@ targets:
         buildPhase: resources
       - path: Resources/hms_en.json
         buildPhase: resources
+      - path: Resources/filaments.json
+        buildPhase: resources
+      - path: Resources/Printers
+        buildPhase: resources
       - path: Resources/AppIcon.icns
         buildPhase: resources
       - path: LICENSE
@@ -49,12 +53,18 @@ targets:
       - target: BambuBarWidget
         embed: true
         codeSign: true
+    # Declared so the app keeps its scheme now that the tests have one (Xcode only makes schemes when none exist).
+    scheme: {}
   BambuBarWidget:
     type: app-extension
     platform: macOS
     sources:
       - path: Sources/BambuBarWidget
       - path: Sources/Shared
+      - path: Resources/Printers
+        buildPhase: resources
+        excludes:
+          - "*.usdz"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rolottr.BambuBar.Widget
@@ -67,3 +77,19 @@ targets:
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+  # Unit tests for the camera's protocol parsing (scripts/test.sh). They compile the few pure files they cover
+  # instead of loading the app, so nothing launches or connects while they run.
+  BambuBarTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/BambuBarTests
+      - path: Sources/BambuBar/Printer/CameraProtocol.swift
+      - path: Sources/BambuBar/Printer/VideoDepacketizer.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: NO
+    scheme:
+      testTargets:
+        - BambuBarTests

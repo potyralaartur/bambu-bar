@@ -195,7 +195,9 @@ final class PrinterSession: Identifiable {
         camera.update()
     }
 
-    private func received(_ new: PrinterStatus, canceled: Bool) {
+    private func received(_ reported: PrinterStatus, canceled: Bool) {
+        var new = reported
+        new.fit(to: config.model)
         let old = status
         status = new
         lastHeard = Date()

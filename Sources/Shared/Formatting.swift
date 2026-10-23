@@ -26,6 +26,13 @@ enum Format {
     }
 
     static func temperature(_ value: Double) -> String { "\(Int(value.rounded()))°" }
+
+    /// "≈ 810 g", "1 kg"; `approximate` for measured amounts (the AMS estimates what's left).
+    static func grams(_ value: Int, approximate: Bool = true) -> String {
+        let text = value >= 1000 && value % 1000 == 0 ? "\(value / 1000) kg"
+            : value >= 1000 ? String(format: "%.2f kg", Double(value) / 1000) : "\(value) g"
+        return approximate ? "≈\u{2009}" + text : text
+    }
 }
 
 extension Color {

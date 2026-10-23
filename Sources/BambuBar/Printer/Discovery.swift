@@ -13,7 +13,7 @@ struct DiscoveredPrinter: Identifiable, Equatable {
     var connectMode: String?
     var lastSeen: Date
 
-    var modelName: String { PrinterModels.name(for: modelCode, serial: serial) }
+    var modelName: String { PrinterModel.name(for: modelCode, serial: serial) }
 }
 
 /// Listens for the SSDP-style NOTIFY packets Bambu printers broadcast on UDP 2021 (and answers to an M-SEARCH),
@@ -28,13 +28,20 @@ final class PrinterDiscovery {
     func start() {
         guard !running else { return }
         running = true
-        for port: UInt16 in [2021, 1990] {
+        for port: UInt16 in [2021, 1990] + Self.mockPorts {
             guard let fd = Self.openSocket(port: port) else { continue }
             sockets.append(fd)
             let source = fd
             Thread.detachNewThread { [weak self] in self?.listen(on: source) }
         }
         search()
+    }
+
+    /// The mock fleet announces itself on a port of its own (scripts/fleet), so the copy of Bambu Bar in daily
+    /// use, also bound to 2021, doesn't take its unicast packets.
+    private static var mockPorts: [UInt16] {
+        guard CommandLine.arguments.contains("--emulator") else { return [] }
+        return [2121]
     }
 
     func stop() {

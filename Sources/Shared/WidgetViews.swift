@@ -376,7 +376,15 @@ struct LargeWidgetView: View {
                 HStack(spacing: 8) {
                     WidgetTempTile(title: "Nozzle", symbol: "flame.fill", value: s.nozzle.current, target: s.nozzle.target, tint: Palette.nozzle)
                     WidgetTempTile(title: "Bed", symbol: "heat.waves", value: s.bed.current, target: s.bed.target, tint: Palette.bed)
-                    WidgetTempTile(title: "Chamber", symbol: "thermometer.medium", value: s.chamber, target: nil, tint: Palette.chamber)
+                    if let chamber = s.chamber {
+                        WidgetTempTile(title: "Chamber", symbol: "thermometer.medium", value: chamber,
+                                       target: s.chamberTarget, tint: Palette.chamber)
+                    } else if let left = s.secondNozzle {
+                        WidgetTempTile(title: "Left", symbol: "flame.fill", value: left.current, target: left.target, tint: Palette.nozzle)
+                    } else if let fan = s.partFan {
+                        WidgetStatTile(title: "Part fan", symbol: "fan.fill", value: "\(fan)%",
+                                       tint: Palette.chamber, active: fan > 0)
+                    }
                 }
                 .padding(.top, 14)
                 if let unit = s.ams.first {
@@ -396,7 +404,7 @@ struct LargeWidgetView: View {
                                     SpoolSwatch(spool: spool, active: spool.id == s.activeSpoolID && s.state.isActive, size: 34)
                                     Text(spool.isLoaded ? spool.material : "Empty")
                                         .font(.system(size: 10.5, weight: .semibold)).lineLimit(1)
-                                    Text(spool.isLoaded ? spool.remainText : spool.label)
+                                    Text(spool.isLoaded ? spool.amountText : spool.label)
                                         .font(.system(size: 10)).foregroundStyle(.secondary)
                                 }
                                 .frame(maxWidth: .infinity)
@@ -469,12 +477,45 @@ struct WidgetTempTile: View {
                 Image(systemName: symbol).font(.system(size: 9, weight: .semibold)).foregroundStyle((target ?? 0) > 0 ? tint : .secondary)
                 Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
             }
-            Text(value.map { Format.temperature($0) } ?? "–")
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value.map { Format.temperature($0) } ?? "–")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                // The target only while the heater is still getting there.
+                if let target, target > 0, let value, abs(value - target) > 2 {
+                    Text("→ \(Int(target))°")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(tint)
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.primary.opacity(0.07)))
+    }
+}
+
+/// A tile like the temperature ones for a plain reading (fan speed on models without a chamber sensor).
+struct WidgetStatTile: View {
+    var title: String
+    var symbol: String
+    var value: String
+    var tint: Color
+    var active: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 3) {
+                Image(systemName: symbol).font(.system(size: 9, weight: .semibold)).foregroundStyle(active ? tint : .secondary)
+                Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+            }
+            Text(value)
                 .font(.system(size: 18, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            Text(target.map { $0 > 0 ? "→ \(Int($0))°" : "Off" } ?? "Read only")
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 9)

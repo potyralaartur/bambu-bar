@@ -9,40 +9,14 @@ struct PrinterConfig: Codable, Equatable {
     /// SSDP model code ("N7" for the P2S).
     var modelCode: String
 
-    var modelName: String { PrinterModels.name(for: modelCode, serial: serial) }
-}
+    var modelName: String { PrinterModel.name(for: modelCode, serial: serial) }
+    var model: PrinterModel? { PrinterModel.find(code: modelCode, serial: serial) }
 
-enum PrinterModels {
-    static func name(for code: String, serial: String = "") -> String {
-        switch code.uppercased() {
-        case "N7": return "P2S"
-        case "C11": return "P1P"
-        case "C12": return "P1S"
-        case "BL-P001": return "X1 Carbon"
-        case "BL-P002": return "X1"
-        case "C13", "BL-P003": return "X1E"
-        case "N1", "A12", "A04": return "A1 mini"
-        case "N2S", "A11": return "A1"
-        case "O1D": return "H2D"
-        case "O1E", "O2D": return "H2D Pro"
-        case "O1C", "O1C2": return "H2C"
-        case "O1S": return "H2S"
-        case "N6": return "X2D"
-        case "N9": return "A2L"
-        default:
-            switch serial.prefix(3) {
-            case "22E": return "P2S"
-            case "01P": return "P1S"
-            case "01S": return "P1P"
-            case "00M": return "X1 Carbon"
-            case "03W": return "X1E"
-            case "039": return "A1"
-            case "030": return "A1 mini"
-            case "093": return "H2S"
-            case "094": return "H2D"
-            default: return "Bambu Lab printer"
-            }
-        }
+    /// Printers listen on 8883; `host:port` reaches a mock printer (scripts/fleet).
+    var endpoint: (host: String, port: UInt16) {
+        let parts = host.split(separator: ":")
+        guard parts.count == 2, let port = UInt16(parts[1]) else { return (host, 8883) }
+        return (String(parts[0]), port)
     }
 }
 
@@ -169,7 +143,9 @@ final class PrinterConnection {
         phase = .connecting
         // The watchdog measures silence from here, so it doesn't cut off an attempt that's still connecting.
         lastMessage = Date()
-        let client = MQTTClient(.init(host: config.host, password: accessCode, serial: config.serial, insecure: insecure))
+        let endpoint = config.endpoint
+        let client = MQTTClient(.init(host: endpoint.host, port: endpoint.port, password: accessCode, serial: config.serial,
+                                      insecure: insecure))
         client.onEvent = { [weak self, weak client] event in
             MainActor.assumeIsolated {
                 guard let self, let client, client === self.client else { return }

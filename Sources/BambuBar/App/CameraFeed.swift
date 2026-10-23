@@ -5,10 +5,10 @@ import Observation
 /// One printer's camera, shared by every view that shows it.
 ///
 /// The stream runs while at least one `CameraSurfaceView` is on screen (a hidden window, a collapsed
-/// preview or a closed panel don't count), and for the whole of a print so opening the panel shows it at once.
-/// Otherwise it stops a few seconds after the last surface goes, so switching from the panel to the window
-/// doesn't reconnect. Frames fan out to every surface; a surface that appears mid-stream
-/// is caught up from the last keyframe.
+/// preview or a closed panel don't count), and, with "Keep the camera connected during prints" on, for the
+/// whole of a print so opening the panel shows it at once. Otherwise it stops a few seconds after the last
+/// surface goes, so switching from the panel to the window doesn't reconnect. Frames go only to surfaces on
+/// screen; one that comes (back) on screen mid-stream is caught up from the last keyframe.
 @MainActor
 @Observable
 final class CameraFeed {
@@ -46,8 +46,10 @@ final class CameraFeed {
 
     private var hasViewers: Bool { surfaces.allObjects.contains { $0.isOnScreen } }
 
-    /// A print is under way: keep the stream warm even with nothing on screen.
-    private var keepsWarm: Bool { session?.status?.state.isActive == true && availability() == nil }
+    /// A print is under way and the setting is on: keep the stream warm even with nothing on screen.
+    private var keepsWarm: Bool {
+        PrinterStore.shared.cameraStaysOnWhilePrinting && session?.status?.state.isActive == true && availability() == nil
+    }
 
     private var wanted: Bool { hasViewers || keepsWarm }
 
@@ -56,8 +58,7 @@ final class CameraFeed {
     func attach(_ surface: CameraSurfaceView) {
         surfaces.add(surface)
         surface.feed = self
-        if let lastImage { surface.show(lastImage) }
-        for (index, sample) in sinceKeyframe.enumerated() { surface.show(sample, keyframe: index == 0) }
+        surface.isBehind = true
         viewersChanged()
     }
 
@@ -67,8 +68,9 @@ final class CameraFeed {
         viewersChanged()
     }
 
-    /// A surface appeared or disappeared on screen, or a print started or ended.
+    /// A surface appeared or disappeared on screen, a print started or ended, or the setting changed.
     func viewersChanged() {
+        for surface in surfaces.allObjects where surface.isBehind && surface.isOnScreen { catchUp(surface) }
         if wanted {
             idleStop?.invalidate()
             idleStop = nil
@@ -127,7 +129,10 @@ final class CameraFeed {
         client = nil
         sinceKeyframe = []
         lastImage = nil
-        for surface in surfaces.allObjects { surface.clear() }
+        for surface in surfaces.allObjects {
+            surface.clear()
+            surface.isBehind = false
+        }
         state = .idle
         detail = nil
     }
@@ -136,6 +141,7 @@ final class CameraFeed {
     private func availability() -> String? {
         guard let session else { return "No printer." }
         if session.isDemo { return "The demo printer has no camera." }
+        if PrinterStore.emulatorSettings != nil { return "The mock fleet's printers have no camera." }
         guard session.isOnline else { return "The camera starts when the printer is connected." }
         if session.cameraTransport == .rtsps && session.status?.liveViewEnabled == false {
             return "Turn on LAN Only Liveview on the printer (Settings → Network) to see the camera here."
@@ -177,11 +183,11 @@ final class CameraFeed {
             } else if !sinceKeyframe.isEmpty && sinceKeyframe.count < 300 {
                 sinceKeyframe.append(sample)
             }
-            for surface in surfaces.allObjects { surface.show(sample, keyframe: keyframe) }
+            for surface in onScreen() { surface.show(sample, keyframe: keyframe) }
             becameLive()
         case .image(let image):
             lastImage = image
-            for surface in surfaces.allObjects { surface.show(image) }
+            for surface in onScreen() { surface.show(image) }
             becameLive()
         case .failed(let failure):
             client = nil
@@ -199,6 +205,29 @@ final class CameraFeed {
                 MainActor.assumeIsolated { self?.connect() }
             }
         }
+    }
+
+    /// Surfaces to draw the newest frame on. Those off screen skip decoding and are marked to catch up later;
+    /// one that is back on screen is caught up now, which already includes the newest frame.
+    private func onScreen() -> [CameraSurfaceView] {
+        surfaces.allObjects.filter { surface in
+            guard surface.isOnScreen else {
+                surface.isBehind = true
+                return false
+            }
+            if surface.isBehind {
+                catchUp(surface)
+                return false
+            }
+            return true
+        }
+    }
+
+    /// Brings a surface that missed frames up to date: the last still, or the video since its last keyframe.
+    private func catchUp(_ surface: CameraSurfaceView) {
+        surface.isBehind = false
+        if let lastImage { surface.show(lastImage) }
+        surface.restart(from: sinceKeyframe)
     }
 
     private func becameLive() {

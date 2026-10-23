@@ -17,7 +17,9 @@ struct SlicerPrinter: Equatable, Identifiable {
 ///
 /// Both slicers save `<Application Support>/<App>/<App>.conf` as JSON (on Windows with an MD5 line after it)
 /// with one object per section: `access_code` and `user_access_code` map serial → code, `ip_address` and
-/// `user_access_dev_ip` map serial → IP (BambuStudio `DevManager.cpp`, `AppConfig.cpp`).
+/// `user_access_dev_ip` map serial → IP (BambuStudio `DevManager.cpp`, `AppConfig.cpp`). Newer Bambu Studio
+/// versions save `user_access_dev_ip` scrambled with the install's `app.slicer_uuid` (see `decodeIP`).
+/// Names and models aren't saved; they come from the printer's network announcements.
 enum SlicerImport {
     static let knownApps = [("BambuStudio", "Bambu Studio"), ("BambuStudioBeta", "Bambu Studio Beta"),
                             ("OrcaSlicer", "OrcaSlicer"), ("OrcaSlicerNightly", "OrcaSlicer Nightly")]
@@ -100,7 +102,8 @@ enum SlicerImport {
             }
         }
         let cloud = section("access_code"), typed = section("user_access_code")
-        let ips = section("ip_address"), typedIPs = section("user_access_dev_ip")
+        let uuid = (json["app"] as? [String: Any])?["slicer_uuid"] as? String ?? ""
+        let ips = section("ip_address"), typedIPs = section("user_access_dev_ip").compactMapValues { decodeIP($0, key: uuid) }
         let serials = Set(cloud.keys).union(typed.keys)
         return serials.sorted().compactMap { serial in
             var codes: [String] = []
@@ -108,5 +111,58 @@ enum SlicerImport {
             guard !codes.isEmpty else { return nil }
             return SlicerPrinter(serial: serial, accessCodes: codes, host: typedIPs[serial] ?? ips[serial], name: nil, source: source)
         }
+    }
+
+    /// Undoes `BBLCrossTalk::Encode_DevIp` (BambuStudio `BBLUtil.cpp`): hex of the IP XORed with the low byte of
+    /// successive `std::mt19937` outputs, seeded with the 32-bit FNV-1a hash of the slicer's UUID. Plain IPs
+    /// (older versions, OrcaSlicer) come back as they are.
+    static func decodeIP(_ value: String, key: String) -> String? {
+        func isAddress(_ text: String) -> Bool {
+            !text.isEmpty && text.count <= 64 && text.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || ".:-".contains($0)) }
+                && text.contains { ".:".contains($0) }
+        }
+        if isAddress(value) && value.contains(".") { return value }
+        guard !key.isEmpty, value.count % 2 == 0, value.allSatisfy(\.isHexDigit) else { return isAddress(value) ? value : nil }
+        var seed: UInt32 = 2_166_136_261
+        for byte in key.utf8 { seed = (seed ^ UInt32(byte)) &* 16_777_619 }
+        var rng = MersenneTwister(seed: seed)
+        var bytes: [UInt8] = []
+        var index = value.startIndex
+        while index < value.endIndex {
+            let next = value.index(index, offsetBy: 2)
+            guard let byte = UInt8(value[index..<next], radix: 16) else { return nil }
+            bytes.append(byte ^ UInt8(truncatingIfNeeded: rng.next()))
+            index = next
+        }
+        let plain = String(decoding: bytes, as: UTF8.self)
+        return isAddress(plain) ? plain : nil
+    }
+}
+
+/// The 32-bit Mersenne Twister, matching C++'s `std::mt19937`.
+struct MersenneTwister {
+    private var state = [UInt32](repeating: 0, count: 624)
+    private var index = 624
+
+    init(seed: UInt32) {
+        state[0] = seed
+        for i in 1..<624 { state[i] = 1_812_433_253 &* (state[i - 1] ^ (state[i - 1] >> 30)) &+ UInt32(i) }
+    }
+
+    mutating func next() -> UInt32 {
+        if index >= 624 {
+            for i in 0..<624 {
+                let y = (state[i] & 0x8000_0000) | (state[(i + 1) % 624] & 0x7FFF_FFFF)
+                state[i] = state[(i + 397) % 624] ^ (y >> 1) ^ (y & 1 == 0 ? 0 : 0x9908_B0DF)
+            }
+            index = 0
+        }
+        var y = state[index]
+        index += 1
+        y ^= y >> 11
+        y ^= (y << 7) & 0x9D2C_5680
+        y ^= (y << 15) & 0xEFC6_0000
+        y ^= y >> 18
+        return y
     }
 }

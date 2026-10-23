@@ -162,7 +162,7 @@ enum ShowcaseScene: String, CaseIterable, Identifiable {
             s.externalSpool = printer.externalSpool
             s.activeSpoolID = printer.activeSpoolID
         }
-        if printer.model.isEmpty == false, PrinterShape(model: printer.model).isBedSlinger { s.chamber = nil }
+        s.fit(to: PrinterModel.named(printer.model))
         let filament = s.activeSpool
         var lastJob: JobRecord?
         switch self {

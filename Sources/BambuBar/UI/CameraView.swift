@@ -8,6 +8,8 @@ import SwiftUI
 /// It tells its feed when it comes and goes on screen, so a closed window or panel stops the stream.
 final class CameraSurfaceView: NSView {
     weak var feed: CameraFeed?
+    /// Missed frames while off screen; the feed catches it up when it's back.
+    var isBehind = false
     private let videoLayer = AVSampleBufferDisplayLayer()
     private let imageLayer = CALayer()
     private var needsKeyframe = true
@@ -63,6 +65,13 @@ final class CameraSurfaceView: NSView {
         }
         if imageLayer.contents != nil { imageLayer.contents = nil }
         renderer.enqueue(sample)
+    }
+
+    /// Starts decoding afresh from `samples`, which begin with a keyframe. Keeps the picture shown until then.
+    func restart(from samples: [CMSampleBuffer]) {
+        videoLayer.sampleBufferRenderer.flush()
+        needsKeyframe = true
+        for (index, sample) in samples.enumerated() { show(sample, keyframe: index == 0) }
     }
 
     func show(_ image: CGImage) {
@@ -134,7 +143,7 @@ struct CameraSurface: NSViewRepresentable {
 
 // MARK: - Player
 
-/// The feed with its state on top: a spinner while connecting, why it isn't showing, a LIVE badge.
+/// The feed with its state on top: a spinner while connecting, or why it isn't showing.
 struct CameraPlayer: View {
     var session: PrinterSession
     var cornerRadius: CGFloat = 16
@@ -160,14 +169,7 @@ struct CameraPlayer: View {
     private func stateOverlay(_ feed: CameraFeed) -> some View {
         switch feed.state {
         case .live:
-            VStack {
-                HStack {
-                    liveBadge
-                    Spacer()
-                }
-                Spacer()
-            }
-            .padding(compact ? 8 : 10)
+            EmptyView()
         case .idle, .connecting:
             message(symbol: nil, text: "Connecting to the camera…", busy: true)
         case .unavailable(let reason):
@@ -176,18 +178,6 @@ struct CameraPlayer: View {
             message(symbol: "exclamationmark.triangle", text: reason, retry: retrying ? nil : { feed.tryAgain() },
                     busy: retrying)
         }
-    }
-
-    private var liveBadge: some View {
-        HStack(spacing: 4) {
-            Circle().fill(Palette.failed).frame(width: 6, height: 6)
-            Text("LIVE").font(.system(size: compact ? 9 : 10, weight: .bold)).tracking(0.5)
-        }
-        .fixedSize()
-        .foregroundStyle(.white)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(.black.opacity(0.45)))
     }
 
     private func message(symbol: String?, text: String, retry: (() -> Void)? = nil, busy: Bool = false) -> some View {
@@ -275,11 +265,17 @@ struct CameraPreview: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
                 Button { withAnimation(.smooth(duration: 0.25)) { expanded.toggle() } } label: {
-                    HStack(spacing: 5) {
+                    // Symbols in the label's own font, on its baseline, sit centred on the text; a smaller
+                    // font centred on the text's frame (which includes descender room) looks low.
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: 11.5, weight: .bold))
+                            .imageScale(.small)
+                            .frame(width: 10)
                             .rotationEffect(.degrees(expanded ? 90 : 0))
-                        Image(systemName: "video.fill").font(.system(size: 10))
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 11.5))
+                            .imageScale(.small)
                         Text("Camera").font(.system(size: 11.5, weight: .semibold))
                         Spacer(minLength: 0)
                     }
@@ -307,7 +303,7 @@ struct CameraPreview: View {
 
 // MARK: - Window
 
-/// A resizable window per printer with just the camera, optionally kept above other windows.
+/// A resizable window per printer with just the camera, kept above other windows like picture in picture.
 @MainActor
 enum CameraWindow {
     private static var windows: [String: NSWindow] = [:]
@@ -325,7 +321,11 @@ enum CameraWindow {
             backing: .buffered, defer: false)
         window.title = "\(session.config.name) Camera"
         window.titlebarAppearsTransparent = true
+        // The view draws the name itself, in white over a shade; the system title vanishes over a bright picture.
+        window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
+        // A picture-in-picture window: it stays above other windows while you work elsewhere.
+        window.level = .floating
         window.backgroundColor = .black
         window.contentMinSize = NSSize(width: 320, height: 180)
         window.contentAspectRatio = NSSize(width: session.camera.aspectRatio, height: 1)
@@ -362,19 +362,16 @@ enum CameraWindow {
         window.setContentSize(NSSize(width: width, height: (width / ratio).rounded()))
     }
 
-    static func setFloating(_ floating: Bool, for serial: String) {
-        windows[serial]?.level = floating ? .floating : .normal
-    }
 }
 
 struct CameraWindowView: View {
     var session: PrinterSession
-    @State private var floating = false
     @State private var hovering = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
             CameraPlayer(session: session, cornerRadius: 0)
+            titleBar
             if hovering {
                 controls
                     .padding(12)
@@ -385,6 +382,28 @@ struct CameraWindowView: View {
         .background(.black)
         .onHover { inside in withAnimation(.smooth(duration: 0.2)) { hovering = inside } }
         .onChange(of: session.camera.aspectRatio) { _, ratio in CameraWindow.setAspectRatio(ratio, for: session.id) }
+    }
+
+    /// The printer's name centred in the title bar, over a shade so it reads on any picture.
+    private var titleBar: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                LinearGradient(colors: [.black.opacity(0.6), .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 52)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                Text(session.config.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.5), radius: 2)
+                    .lineLimit(1)
+                    .padding(.horizontal, 90)
+                    .frame(height: 28)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
+            .frame(height: 52)
+            Spacer(minLength: 0)
+        }
+        .allowsHitTesting(false)
     }
 
     private var controls: some View {
@@ -398,14 +417,6 @@ struct CameraWindowView: View {
             if let detail = session.camera.detail {
                 Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            Button {
-                floating.toggle()
-                CameraWindow.setFloating(floating, for: session.id)
-            } label: {
-                Image(systemName: floating ? "pin.fill" : "pin")
-            }
-            .buttonStyle(.borderless)
-            .help(floating ? "Stop keeping this window on top" : "Keep this window on top of other windows")
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 12)

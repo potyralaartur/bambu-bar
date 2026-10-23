@@ -55,6 +55,9 @@ struct SetupPage: View {
                     }
                     .panel(radius: 14, padding: 12)
                 }
+                if store.readySlicerPrinters.count >= 2 {
+                    addAllCard(store.readySlicerPrinters)
+                }
                 ForEach(newPrinters) { printer in
                     discoveredRow(printer)
                 }
@@ -157,6 +160,45 @@ struct SetupPage: View {
         store.slicerPrinters.filter { p in
             p.host != nil && store.session(p.serial) == nil && !store.discovered.contains { $0.serial == p.serial }
         }
+    }
+
+    /// Several printers with saved codes: add them all in one go rather than one at a time.
+    private func addAllCard(_ printers: [SlicerPrinter]) -> some View {
+        let sources = Set(printers.map(\.source)).sorted().joined(separator: " and ")
+        let models = Dictionary(grouping: printers) { PrinterModel.find(code: modelCode(for: $0), serial: $0.serial)?.name ?? "Other" }
+            .sorted { $0.value.count == $1.value.count ? $0.key < $1.key : $0.value.count > $1.value.count }
+            .map { "\($0.value.count) \($0.key)" }
+            .joined(separator: " · ")
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "square.stack.3d.down.right.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Palette.accent)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Palette.accent.opacity(0.15)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(printers.count) printers in \(sources)").font(.system(size: 13, weight: .semibold))
+                Text(models).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(2)
+                Text("Their access codes are saved there, so they can all be added at once.")
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+                let firstPrinter = !adding
+                store.addAll(printers)
+                navigation.addingPrinter = false
+                if firstPrinter && openAtLogin && !LoginItem.shared.isEnabled && !store.isDemo { LoginItem.shared.setEnabled(true) }
+            } label: {
+                Text("Add All \(printers.count)").frame(width: 120)
+            }
+            .buttonStyle(ControlButtonStyle(tint: Palette.accentDeep, prominent: true))
+            .frame(width: 120)
+        }
+        .panel(radius: 16, padding: 14, tint: Palette.accent)
+    }
+
+    private func modelCode(for printer: SlicerPrinter) -> String {
+        store.discovered.first { $0.serial == printer.serial }?.modelCode ?? ""
     }
 
     /// The code is already known: say where from, and offer to type one instead.

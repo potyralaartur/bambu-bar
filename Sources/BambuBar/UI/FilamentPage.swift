@@ -44,6 +44,10 @@ struct FilamentPage: View {
     private var subtitle: String {
         guard let s = store.status else { return "Spools in your AMS and on the external holder" }
         let loaded = s.allSpools.filter(\.isLoaded).count
+        let grams = s.allSpools.compactMap(\.gramsLeft)
+        if !grams.isEmpty, !(s.state.isActive && s.activeSpool != nil) {
+            return "\(loaded) spool\(loaded == 1 ? "" : "s") loaded · \(Format.grams(grams.reduce(0, +))) of filament on hand"
+        }
         if let active = s.activeSpool, s.state.isActive { return "\(loaded) loaded · printing with \(active.label) \(active.displayName)" }
         return "\(loaded) spool\(loaded == 1 ? "" : "s") loaded"
     }
@@ -88,7 +92,8 @@ struct SpoolCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                SpoolSwatch(spool: spool, active: active, size: 58)
+                SpoolSwatch(spool: spool, active: active, size: 58,
+                            hubText: spool.isLoaded ? spool.weight.map { Format.grams($0, approximate: false) } : nil)
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(spool.label)
@@ -110,19 +115,10 @@ struct SpoolCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            if spool.isLoaded {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Remaining").font(.system(size: 10.5)).foregroundStyle(.secondary)
-                        Spacer()
-                        Text(spool.remain.map { "\($0)%" } ?? "Unknown").font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
-                    }
-                    FilamentProgressBar(progress: Double(spool.remain ?? 0) / 100,
-                                        tint: Color(bambuHex: spool.color).map { bambuLuminance(spool.color) > 0.88 ? Color.secondary : $0 } ?? .secondary,
-                                        height: 5)
-                        .opacity(spool.remain == nil ? 0.4 : 1)
-                }
-            }
+            // Kept in place even when the printer can't measure the spool, so every card has the same proportions.
+            remaining
+                .opacity(spool.isLoaded && spool.remain != nil ? 1 : 0)
+                .accessibilityHidden(spool.remain == nil)
         }
         .panel(radius: 18, padding: 14, tint: active ? Palette.accent : nil)
         .overlay {
@@ -130,12 +126,50 @@ struct SpoolCard: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Palette.accent.opacity(0.6), lineWidth: 1.2)
             }
         }
+        .help(help)
     }
 
+    private var remaining: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("Remaining").foregroundStyle(.secondary)
+                Spacer()
+                if let grams = spool.gramsLeft {
+                    Text(Format.grams(grams)).fontWeight(.semibold).monospacedDigit()
+                }
+            }
+            .font(.system(size: 10.5))
+            HStack(spacing: 8) {
+                FilamentProgressBar(progress: Double(spool.remain ?? 0) / 100,
+                                    tint: Color(bambuHex: spool.color).map { bambuLuminance(spool.color) > 0.88 ? Color.secondary : $0 } ?? .secondary,
+                                    height: 5)
+                // Wide enough for "100%", so the bars line up across cards.
+                Text("\(spool.remain ?? 0)%")
+                    .font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
+                    .frame(width: 32, alignment: .trailing)
+            }
+        }
+    }
+
+    /// "Bambu Lab · Grass Green", with the material when the name doesn't already say it and the hex code when
+    /// the colour has no Bambu name.
     private var detail: String {
-        var parts = [spool.material]
-        parts.append("#" + String(spool.color.prefix(6)))
-        parts.append(spool.isBambu ? "Bambu RFID" : "Third-party")
+        var parts: [String] = []
+        if let brand = spool.brand { parts.append(brand) }
+        if !spool.displayName.localizedCaseInsensitiveContains(spool.material) { parts.append(spool.material) }
+        parts.append(spool.colorName ?? "#" + String(spool.color.prefix(6)))
         return parts.joined(separator: " · ")
+    }
+
+    private var help: String {
+        guard spool.isLoaded else { return "\(spool.label): empty" }
+        var lines = [[spool.brand, spool.displayName].compactMap { $0 }.joined(separator: " "),
+                     [spool.colorName, "#" + String(spool.color.prefix(6))].compactMap { $0 }.joined(separator: " · ")]
+        if let range = spool.nozzleRange { lines.append("Prints at \(range.lowerBound)–\(range.upperBound) °C") }
+        if spool.remain == nil {
+            lines.append(spool.isExternal ? "The external holder can’t weigh the spool."
+                         : "Only Bambu Lab spools with an RFID tag report what’s left.")
+        }
+        return lines.joined(separator: "\n")
     }
 }
