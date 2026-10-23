@@ -15,6 +15,10 @@ enum PrinterShape: Equatable, Sendable {
 
     /// From a model name ("P2S", "A1 mini") or SSDP code ("N7", "N1").
     init(model: String?) {
+        if let known = PrinterModel.named(model) {
+            self = known.shape
+            return
+        }
         let m = (model ?? "").lowercased()
         if m.contains("mini") || m == "n1" || m == "a12" || m == "a04" { self = .mini }
         else if m.hasPrefix("a1") || m.hasPrefix("a2") || m == "n2s" || m == "a11" || m == "n9" { self = .bedSlinger }
@@ -50,6 +54,19 @@ struct PrinterArt: View {
     @Environment(\.demoClock) private var demoClock
 
     var body: some View {
+        if !monochrome, let renders = PrinterRenderSet.named(shape.assetName) {
+            PrinterRender(renders: renders, state: state, progress: progress, filament: filament, spools: spools,
+                          lightOn: lightOn, dimmed: dimmed)
+                .saturation(dimmed ? 0.1 : 1)
+                .opacity(dimmed ? 0.55 : 1)
+                .accessibilityHidden(true)
+        } else {
+            drawing
+        }
+    }
+
+    /// The vector drawing: monochrome widgets, and a fallback should the renders be missing.
+    private var drawing: some View {
         Group {
             if let demoClock, animated, state == .printing, !dimmed {
                 canvas(time: demoClock.timeIntervalSinceReferenceDate)

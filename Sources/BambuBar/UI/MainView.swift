@@ -8,12 +8,7 @@ struct MainView: View {
         @Bindable var navigation = navigation
         NavigationSplitView {
             List(selection: $navigation.section) {
-                Section {
-                    ForEach([AppSection.overview, .filament, .widgets]) { row($0) }
-                }
-                Section {
-                    ForEach([AppSection.settings, .about]) { row($0) }
-                }
+                ForEach(AppSection.allCases.filter { $0 != .fleet || store.hasMultiplePrinters }) { row($0) }
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
             .safeAreaInset(edge: .top) {
@@ -36,6 +31,7 @@ struct MainView: View {
             }
             .scrollContentBackground(.hidden)
             .background(PageBackground(status: store.status))
+            .overlay(alignment: .bottomTrailing) { UpdateOffer() }
             .navigationTitle(navigation.section.title)
             .toolbar(removing: .title)
         }
@@ -49,6 +45,8 @@ struct MainView: View {
     @ViewBuilder
     private var page: some View {
         switch navigation.section {
+        case .fleet:
+            if store.hasMultiplePrinters && !navigation.addingPrinter { FleetPage() } else if store.isConfigured { OverviewPage() } else { SetupPage() }
         case .overview:
             if store.isConfigured && !navigation.addingPrinter { OverviewPage() } else { SetupPage() }
         case .filament: FilamentPage()

@@ -88,8 +88,18 @@ struct Spool: Codable, Equatable, Identifiable, Sendable {
     var colors: [String]
     /// Percent remaining, nil when the printer can't tell (non-RFID spools).
     var remain: Int?
+    /// Net filament weight of a full spool in grams (`tray_weight`), from the Bambu RFID tag.
+    var weight: Int? = nil
     var isLoaded: Bool
     var isBambu: Bool
+    /// The Bambu Studio filament preset set for the slot (`tray_info_idx`, "GFA01").
+    var preset: String? = nil
+    /// "Bambu Lab" for RFID spools, else the maker of the preset the slot is set to ("SUNLU").
+    var brand: String? = nil
+    /// Bambu Lab's colour name ("Grass Green"), for their spools and colours picked from their list.
+    var colorName: String? = nil
+    /// Nozzle temperatures the filament prints at, from the tag or the preset.
+    var nozzleRange: ClosedRange<Int>? = nil
 
     static let externalID = 254
 
@@ -100,6 +110,27 @@ struct Spool: Codable, Equatable, Identifiable, Sendable {
         return "—"
     }
     var displayName: String { name.isEmpty ? material : name }
+
+
+    /// Filament left in grams: the full spool's weight from its tag times the share the AMS measured left.
+    var gramsLeft: Int? {
+        guard isLoaded, let remain, let weight, weight > 0 else { return nil }
+        return Int((Double(weight) * Double(remain) / 100).rounded())
+    }
+
+    /// "≈ 810 g" when the weight is known, else the percentage.
+    var amountText: String {
+        if let grams = gramsLeft { return Format.grams(grams) }
+        return remainText
+    }
+
+    /// "81% · ≈ 810 g", for tooltips.
+    var remainDetail: String {
+        guard isLoaded else { return "Empty" }
+        guard let remain else { return "Not measured" }
+        guard let grams = gramsLeft else { return "\(remain)%" }
+        return "\(remain)% · \(Format.grams(grams))"
+    }
     /// "A1", "A2"… like the printer's screen; "Ext" for the external spool.
     var label: String {
         if isExternal { return "Ext" }
@@ -176,6 +207,10 @@ struct PrinterStatus: Codable, Equatable, Sendable {
     var nozzle = Temperature(current: 0, target: 0)
     var bed = Temperature(current: 0, target: 0)
     var chamber: Double?
+    /// The chamber heater's target on models that heat the chamber (H2, X1E, X2D); zero when off.
+    var chamberTarget: Double?
+    /// The left nozzle on two-nozzle models (`nozzle` is the right one, as Bambu Studio numbers them).
+    var secondNozzle: Temperature?
     /// Fan speeds in percent.
     var partFan: Int?
     var auxFan: Int?

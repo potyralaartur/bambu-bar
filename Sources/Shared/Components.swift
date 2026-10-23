@@ -5,6 +5,8 @@ struct SpoolSwatch: View {
     var spool: Spool?
     var active = false
     var size: CGFloat = 34
+    /// Printed on a wider hub, such as the full spool's weight.
+    var hubText: String? = nil
 
     var body: some View {
         let color = spool.flatMap { $0.isLoaded ? Color(bambuHex: $0.color) : nil }
@@ -47,10 +49,25 @@ struct SpoolSwatch: View {
             Circle().fill(LinearGradient(colors: [.white.opacity(0.30), .clear, .black.opacity(0.22)],
                                          startPoint: .topLeading, endPoint: .bottomTrailing))
             Circle().strokeBorder(Color.primary.opacity(bambuLuminance(spool?.color ?? "") > 0.85 ? 0.18 : 0.06), lineWidth: 0.75)
-            Circle()
-                .fill(Color.black.opacity(0.55))
-                .frame(width: size * 0.2, height: size * 0.2)
-                .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+            if let hubText {
+                Circle()
+                    .fill(Color.black.opacity(0.62))
+                    .frame(width: size * 0.58, height: size * 0.58)
+                    .overlay(Circle().strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
+                    .overlay {
+                        Text(hubText)
+                            .font(.system(size: size * 0.18, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .padding(.horizontal, size * 0.03)
+                    }
+            } else {
+                Circle()
+                    .fill(Color.black.opacity(0.55))
+                    .frame(width: size * 0.2, height: size * 0.2)
+                    .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+            }
         }
     }
 }

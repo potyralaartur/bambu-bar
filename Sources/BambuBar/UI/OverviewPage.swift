@@ -6,9 +6,15 @@ struct OverviewPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            PageHeader(title: store.printerName, subtitle: subtitle) {
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 3) {
+                    PrinterNameField()
+                    Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                Spacer()
                 RefreshControl()
             }
+            .padding(.bottom, 4)
             if let status = store.status, store.isOnline {
                 JobHero(status: status, compact: false)
                 if status.state.isActive {
@@ -57,15 +63,14 @@ struct OverviewPage: View {
 
     private func metrics(_ s: PrinterStatus) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionLabel("Temperatures & airflow")
+            SectionLabel(s.chamber == nil && store.config?.model?.isEnclosed == false ? "Temperatures & cooling" : "Temperatures & airflow")
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
                 GridRow {
-                    TemperatureTile(title: "Nozzle", symbol: "flame.fill", temperature: s.nozzle, tint: Palette.nozzle, maxValue: 300)
-                    TemperatureTile(title: "Bed", symbol: "heat.waves", temperature: s.bed, tint: Palette.bed, maxValue: 110)
-                    TemperatureTile(title: "Chamber", symbol: "thermometer.medium", temperature: nil, plain: s.chamber, tint: Palette.chamber, maxValue: 65)
+                    TemperatureTiles(status: s, model: store.config?.model, fillsHeight: true)
                     FanTile(status: s)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -76,8 +81,12 @@ struct OverviewPage: View {
                 VStack(spacing: 9) {
                     DetailRow(title: "Speed", value: "\(store.speed.title) (\(store.speed.percent)%)", symbol: "speedometer")
                     DetailRow(title: "Nozzle", value: nozzleText(s), symbol: "pencil.tip")
-                    DetailRow(title: "Door", value: s.doorOpen.map { $0 ? "Open" : "Closed" } ?? "—", symbol: "door.left.hand.closed")
-                    DetailRow(title: "Chamber light", value: store.chamberLightOn ? "On" : "Off", symbol: "lightbulb")
+                    if store.config?.model?.isEnclosed ?? true {
+                        DetailRow(title: "Door", value: s.doorOpen.map { $0 ? "Open" : "Closed" } ?? "—", symbol: "door.left.hand.closed")
+                    }
+                    if s.chamberLightOn != nil {
+                        DetailRow(title: "Light", value: store.chamberLightOn ? "On" : "Off", symbol: "lightbulb")
+                    }
                 }
                 .panel(radius: 16, padding: 13)
                 VStack(spacing: 9) {
@@ -88,6 +97,9 @@ struct OverviewPage: View {
                 }
                 .panel(radius: 16, padding: 13)
             }
+            if let model = store.config?.model {
+                ModelCard(model: model)
+            }
         }
     }
 
@@ -96,6 +108,35 @@ struct OverviewPage: View {
         if let d = s.nozzleDiameter { parts.append(String(format: "%.1f mm", d)) }
         if let t = s.nozzleType { parts.append(NozzleType.describe(t)) }
         return parts.isEmpty ? "—" : parts.joined(separator: " · ")
+    }
+}
+
+/// What this model is built for, from Bambu Lab's published profiles.
+struct ModelCard: View {
+    var model: PrinterModel
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(spacing: 9) {
+                DetailRow(title: "Build volume", value: model.buildVolumeText, symbol: "cube")
+                DetailRow(title: "Chamber", value: model.chamberText, symbol: model.isEnclosed ? "square.stack.3d.up.fill" : "square.stack.3d.up")
+                DetailRow(title: "Nozzles", value: model.nozzleCount == 2 ? "Two, up to \(model.nozzleMax) °C" : "One, up to \(model.nozzleMax) °C", symbol: "flame")
+            }
+            .panel(radius: 16, padding: 13)
+            VStack(spacing: 9) {
+                DetailRow(title: "Bed", value: "Up to \(model.bedMax) °C", symbol: "heat.waves")
+                DetailRow(title: "Fans", value: fans, symbol: "fan")
+                DetailRow(title: "Filament", value: model.usesAMSLite ? "AMS Lite" : "AMS, AMS 2 Pro, AMS HT", symbol: "circle.circle")
+            }
+            .panel(radius: 16, padding: 13)
+        }
+    }
+
+    private var fans: String {
+        var parts = ["Part cooling"]
+        if model.hasAuxFan { parts.append("aux") }
+        if model.hasChamberFan { parts.append("chamber") }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -111,8 +152,9 @@ struct FanTile: View {
                 Text("Fans").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             }
             fan("Part", status.partFan)
-            fan("Aux", status.auxFan)
-            if let exhaust = status.exhaustFan { fan("Exhaust", exhaust) } else if let hotend = status.heatbreakFan { fan("Hotend", hotend) }
+            if let aux = status.auxFan { fan("Aux", aux) }
+            if let exhaust = status.exhaustFan { fan("Chamber", exhaust) }
+            if let hotend = status.heatbreakFan, status.auxFan == nil || status.exhaustFan == nil { fan("Hotend", hotend) }
         }
         .panel(radius: 14, padding: 11)
     }
@@ -153,5 +195,73 @@ enum NozzleType {
         case "H", "E": return material + ", high flow"
         default: return material
         }
+    }
+}
+
+/// The printer's name as the page title, with a pencil to rename it. The name is Bambu Bar's own: it starts as
+/// the one the printer announces (set in Bambu Handy) and changing it here doesn't rename the printer.
+struct PrinterNameField: View {
+    @Environment(PrinterStore.self) private var store
+    @State private var editing = false
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        if editing, let config = store.config {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    TextField("Printer name", text: $draft)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 26, weight: .bold))
+                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.07)))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.accent.opacity(0.6), lineWidth: 1))
+                        .frame(maxWidth: 420)
+                        .focused($focused)
+                        .onSubmit(save)
+                        .onExitCommand { editing = false }
+                    Button("Cancel") { editing = false }
+                    Button("Save", action: save)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Palette.accentDeep)
+                        .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                Text(hint(config))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            .onAppear { focused = true }
+        } else {
+            HStack(alignment: .center, spacing: 8) {
+                Text(store.printerName).font(.system(size: 26, weight: .bold)).lineLimit(1)
+                if store.config != nil {
+                    Button {
+                        draft = store.printerName
+                        editing = true
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.primary.opacity(0.07)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Rename this printer in Bambu Bar")
+                }
+            }
+        }
+    }
+
+    private func hint(_ config: PrinterConfig) -> String {
+        if let announced = store.announcedName(for: config.serial), announced != draft {
+            return "Only in Bambu Bar. The printer still calls itself \u{201C}\(announced)\u{201D}; rename it there in Bambu Handy."
+        }
+        return "Only in Bambu Bar, for the menu bar, window and widgets. The printer keeps its own name."
+    }
+
+    private func save() {
+        guard let serial = store.config?.serial, !draft.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        store.rename(serial, to: draft)
+        editing = false
     }
 }

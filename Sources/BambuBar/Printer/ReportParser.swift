@@ -92,6 +92,7 @@ enum ReportParser {
         let extruders = (device?["extruder"] as? [String: Any])?["info"] as? [[String: Any]]
         if let packed = int(extruders?.first?["temp"]) {
             s.nozzle = unpack(packed)
+            if let extruders, extruders.count > 1, let second = int(extruders[1]["temp"]) { s.secondNozzle = unpack(second) }
         } else {
             s.nozzle = Temperature(current: double(p["nozzle_temper"]) ?? 0, target: double(p["nozzle_target_temper"]) ?? 0)
         }
@@ -101,11 +102,13 @@ enum ReportParser {
             s.bed = Temperature(current: double(p["bed_temper"]) ?? 0, target: double(p["bed_target_temper"]) ?? 0)
         }
         if let packed = int(((device?["ctc"] as? [String: Any])?["info"] as? [String: Any])?["temp"]) {
-            s.chamber = unpack(packed).current
+            let chamber = unpack(packed)
+            s.chamber = chamber.current
+            s.chamberTarget = chamber.target
         } else if let t = double((p["info"] as? [String: Any])?["temp"]) ?? double(p["chamber_temper"]) {
             s.chamber = t
         }
-        if let c = s.chamber, c <= 0 || c > 120 { s.chamber = nil }
+        if let c = s.chamber, c <= 0 || c > 120 { s.chamber = nil; s.chamberTarget = nil }
 
         // Fans: the `airduct` parts already report percent; the legacy fields are 0-15.
         if let parts = (device?["airduct"] as? [String: Any])?["parts"] as? [[String: Any]], !parts.isEmpty {
@@ -181,8 +184,9 @@ enum ReportParser {
                 let bit = id >= 128 ? 16 + (id - 128) : id * 4 + slot
                 var spool = spoolFrom(t, id: global, unit: id, slot: slot)
                 if let existBits, existBits & (1 << UInt64(bit)) == 0 { spool.isLoaded = false }
-                if let rfidBits { spool.isBambu = rfidBits & (1 << UInt64(bit)) != 0 && spool.isLoaded }
-                if !spool.isLoaded { spool.material = ""; spool.name = ""; spool.remain = nil }
+                // Only ever narrows the tag check: the P2S sets every bit, Bambu spool or not.
+                if let rfidBits, rfidBits & (1 << UInt64(bit)) == 0 { spool.isBambu = false }
+                describe(&spool)
                 return spool
             }.sorted { $0.slot < $1.slot }
             var humidity = int(u["humidity_raw"])
@@ -199,7 +203,9 @@ enum ReportParser {
         if let v = virtual {
             var ext = spoolFrom(v, id: Spool.externalID, unit: 255, slot: 0)
             ext.isLoaded = !(string(v["tray_type"]) ?? "").isEmpty
-            ext.isBambu = ext.isLoaded && (string(v["tag_uid"]).map { !$0.allSatisfy { $0 == "0" } } ?? false)
+            // Nothing weighs the spool on the external holder; its `remain` is a placeholder.
+            ext.remain = nil
+            describe(&ext)
             s.externalSpool = ext
         }
 
@@ -235,9 +241,32 @@ enum ReportParser {
         var remain = int(t["remain"])
         if let r = remain, r < 0 || r > 100 { remain = nil }
         let tag = string(t["tag_uid"]) ?? ""
-        return Spool(id: id, unit: unit, slot: slot, material: material, name: string(t["tray_sub_brands"]) ?? "",
-                     color: color, colors: colors.isEmpty ? [color] : colors, remain: remain, isLoaded: loaded,
-                     isBambu: !tag.isEmpty && !tag.allSatisfy { $0 == "0" })
+        var weight = int(t["tray_weight"])
+        if let w = weight, w <= 0 || w > 10_000 { weight = nil }
+        var spool = Spool(id: id, unit: unit, slot: slot, material: material, name: string(t["tray_sub_brands"]) ?? "",
+                          color: color, colors: colors.isEmpty ? [color] : colors, remain: remain, weight: weight, isLoaded: loaded,
+                          isBambu: !tag.isEmpty && !tag.allSatisfy { $0 == "0" },
+                          preset: string(t["tray_info_idx"]).flatMap { $0.isEmpty ? nil : $0 })
+        spool.colorName = FilamentCatalog.colorName(tagCode: string(t["tray_id_name"]) ?? "", preset: spool.preset, hex: color)
+        if let low = int(t["nozzle_temp_min"]), let high = int(t["nozzle_temp_max"]), low > 0, high >= low {
+            spool.nozzleRange = low...high
+        }
+        return spool
+    }
+
+    /// Fills in the maker and product from the slot's preset once it's known whether the spool has a Bambu tag.
+    /// A spool without one is whatever the slot was set to on the printer or in Bambu Studio.
+    private static func describe(_ spool: inout Spool) {
+        guard spool.isLoaded else {
+            spool = Spool(id: spool.id, unit: spool.unit, slot: spool.slot, material: "", name: "", color: spool.color,
+                          colors: spool.colors, remain: nil, isLoaded: false, isBambu: false)
+            return
+        }
+        let preset = spool.preset.flatMap(FilamentCatalog.preset)
+        spool.brand = spool.isBambu ? "Bambu Lab" : preset?.vendor
+        if spool.name.isEmpty, let product = preset?.product, product.caseInsensitiveCompare(spool.material) != .orderedSame {
+            spool.name = product
+        }
     }
 
     private static func amsKind(id: Int, info: String?, modules: [String: (product: String, version: String)]) -> AMSKind {

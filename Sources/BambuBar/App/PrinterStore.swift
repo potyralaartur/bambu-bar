@@ -74,6 +74,14 @@ final class PrinterStore {
     private var toastTask: Task<Void, Never>?
     private var insecureTLS = CommandLine.arguments.contains("--insecure-tls")
 
+    /// `--emulator <BambuStudio.conf> [--add-all]`: the mock fleet from scripts/fleet. Its printers come from the
+    /// settings file it writes, as if Bambu Studio had saved them; nothing is saved, not even the access codes.
+    static var emulatorSettings: URL? {
+        let a = CommandLine.arguments
+        guard let i = a.firstIndex(of: "--emulator"), i + 1 < a.count else { return nil }
+        return URL(fileURLWithPath: (a[i + 1] as NSString).expandingTildeInPath)
+    }
+
     static var developerConnection: (host: String, serial: String, code: String)? {
         let a = CommandLine.arguments
         guard let i = a.firstIndex(of: "--connect"), i + 3 < a.count else { return nil }
@@ -122,10 +130,30 @@ final class PrinterStore {
             // `--model <code>` (SSDP code, e.g. C12 for a P1S) picks the drawing and camera transport; default P2S.
             let args = CommandLine.arguments
             let model = args.firstIndex(of: "--model").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "N7"
-            let name = model == "N7" ? "P2S Emulator" : PrinterModels.name(for: model, serial: dev.serial)
+            let name = model == "N7" ? "P2S Emulator" : PrinterModel.name(for: model, serial: dev.serial)
             let session = add(PrinterConfig(host: dev.host, serial: dev.serial, name: name, modelCode: model))
             session.start(accessCode: dev.code, insecure: insecureTLS)
             writeSnapshot(force: true)
+            return
+        }
+
+        if let settings = Self.emulatorSettings {
+            isDemo = true
+            insecureTLS = true
+            discovery.start()
+            importSlicerSettings(from: settings)
+            if CommandLine.arguments.contains("--add-all") {
+                // Waits a little for the fleet's announcements, which carry the printers' names and models.
+                Task { [weak self] in
+                    for _ in 0..<16 {
+                        guard let self else { return }
+                        if self.slicerPrinters.allSatisfy({ p in self.discovered.contains { $0.serial == p.serial } }) { break }
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                    guard let self else { return }
+                    self.addAll(self.slicerPrinters)
+                }
+            }
             return
         }
 
@@ -229,7 +257,7 @@ final class PrinterStore {
     /// Saves a printer (new, or a new address/code for a known one) and connects to it.
     func connect(to config: PrinterConfig, accessCode: String, alternatives: [String] = []) {
         let code = accessCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        Keychain.setAccessCode(code, for: config.serial)
+        if !isDemo { Keychain.setAccessCode(code, for: config.serial) }
         let session: PrinterSession
         if let existing = self.session(config.serial) {
             existing.config = config
@@ -241,6 +269,50 @@ final class PrinterStore {
         select(config.serial)
         session.start(accessCode: code, alternatives: alternatives, insecure: insecureTLS)
         writeSnapshot(force: true)
+    }
+
+    /// Slicer printers that can be added right away: not set up yet, with an address from the network or the
+    /// slicer's settings.
+    var readySlicerPrinters: [SlicerPrinter] {
+        slicerPrinters.filter { session($0.serial) == nil && (host(for: $0) != nil) }
+    }
+
+    private func host(for printer: SlicerPrinter) -> String? {
+        discovered.first { $0.serial == printer.serial }?.host ?? printer.host
+    }
+
+    /// Adds every printer a slicer knows in one go, named and typed from their network announcements when
+    /// they've been seen, else after their model and serial ("P2S 495").
+    func addAll(_ printers: [SlicerPrinter]) {
+        var added: [PrinterSession] = []
+        for printer in printers.sorted(by: { name(for: $0).localizedStandardCompare(name(for: $1)) == .orderedAscending })
+        where session(printer.serial) == nil {
+            guard let host = host(for: printer), let code = printer.accessCodes.first else { continue }
+            let seen = discovered.first { $0.serial == printer.serial }
+            let config = PrinterConfig(host: host, serial: printer.serial.uppercased(), name: name(for: printer),
+                                       modelCode: seen?.modelCode ?? "")
+            if !isDemo { Keychain.setAccessCode(code, for: config.serial) }
+            let session = add(config)
+            session.start(accessCode: code, alternatives: Array(printer.accessCodes.dropFirst()), insecure: insecureTLS)
+            added.append(session)
+        }
+        guard !added.isEmpty else { return }
+        saveConfigs()
+        if selectedSerial == nil || session(selectedSerial!) == nil { select(added[0].id) }
+        writeSnapshot(force: true)
+    }
+
+    private func name(for printer: SlicerPrinter) -> String {
+        let seen = discovered.first { $0.serial == printer.serial }
+        if let name = seen?.name, !name.isEmpty, name != printer.serial { return name }
+        let model = PrinterModel.find(code: seen?.modelCode ?? "", serial: printer.serial)
+        return "\(model?.name ?? "Printer") \(printer.serial.suffix(3))"
+    }
+
+    /// The name the printer announces on the network (set in Bambu Handy or Bambu Studio), when it has been seen.
+    func announcedName(for serial: String) -> String? {
+        guard let name = discovered.first(where: { $0.serial == serial })?.name, !name.isEmpty, name != serial else { return nil }
+        return name
     }
 
     func rename(_ serial: String, to name: String) {
@@ -568,6 +640,9 @@ final class PrinterStore {
         if CommandLine.arguments.contains("--fleet") {
             printers.append((PrinterConfig(host: "192.168.1.51", serial: "00M00A000000000", name: "X1C Garage", modelCode: "BL-P001"), .idle))
             printers.append((PrinterConfig(host: "192.168.1.52", serial: "039000000000000", name: "A1 Desk", modelCode: "N2S"), .paused))
+            printers.append((PrinterConfig(host: "192.168.1.53", serial: "094000000000000", name: "H2D Studio", modelCode: "O1D"), .printing))
+            printers.append((PrinterConfig(host: "192.168.1.54", serial: "030000000000000", name: "A1 mini Shelf", modelCode: "N1"), .finished))
+            printers.append((PrinterConfig(host: "192.168.1.55", serial: "01P000000000000", name: "P1S Office", modelCode: "C12"), .printing))
         }
         for (index, (config, scenario)) in printers.enumerated() {
             add(config).startDemo(scenario, variant: index)
@@ -583,7 +658,7 @@ final class PrinterStore {
 enum HistoryStore {
     /// Demo and developer sessions never touch the real history.
     private static var isEphemeral: Bool {
-        CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--connect")
+        CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--connect") || CommandLine.arguments.contains("--emulator")
     }
 
     private static var url: URL? {

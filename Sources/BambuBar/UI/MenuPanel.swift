@@ -4,12 +4,26 @@ import SwiftUI
 struct MenuPanel: View {
     @Environment(PrinterStore.self) private var store
     @Environment(\.plainPanel) private var plainPanel
+    /// The panel lists every printer instead of showing one.
+    @AppStorage("panelShowsAllPrinters") private var showsAllSetting = false
+    /// Set by README frames, which mustn't touch the setting.
+    var showsAllOverride: Bool?
+
+    private var showsAll: Bool {
+        get { showsAllOverride ?? showsAllSetting }
+        nonmutating set { showsAllSetting = newValue }
+    }
 
     var body: some View {
         VStack(spacing: 10) {
             header
             if !store.isConfigured {
                 SetupPrompt()
+            } else if showsAll && store.hasMultiplePrinters {
+                FleetList { session in
+                    store.select(session.id)
+                    showsAll = false
+                }
             } else if let status = store.status, store.isOnline {
                 JobHero(status: status, compact: true)
                 if let issue = status.mostSevereIssue, issue.severity <= .common {
@@ -29,6 +43,9 @@ struct MenuPanel: View {
             } else {
                 ConnectionCard()
             }
+            if let release = UpdateChecker.shared.offered {
+                UpdateRow(release: release)
+            }
             if let toast = store.toast {
                 ToastView(toast: toast)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -42,14 +59,19 @@ struct MenuPanel: View {
         .animation(.smooth(duration: 0.3), value: store.toast)
         .animation(.smooth(duration: 0.3), value: store.status?.state)
         .animation(.smooth(duration: 0.25), value: store.selectedSerial)
+        .animation(.smooth(duration: 0.25), value: showsAll)
         // Opening the panel shows the printer the menu bar is showing.
-        .onAppear { if let serial = store.menuBarSession?.id { store.select(serial) } }
+        .onAppear { if showsAllOverride == nil, let serial = store.menuBarSession?.id { store.select(serial) } }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                if store.hasMultiplePrinters {
+                if showsAll && store.hasMultiplePrinters {
+                    Text("All Printers").font(.system(size: 14, weight: .semibold))
+                    Text(store.fleetSummary)
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                } else if store.hasMultiplePrinters {
                     PrinterPicker {
                         HStack(spacing: 5) {
                             Text(store.printerName)
@@ -67,12 +89,19 @@ struct MenuPanel: View {
                         .font(.system(size: 14, weight: .semibold))
                         .lineLimit(1)
                 }
-                HStack(spacing: 5) {
-                    Circle().fill(linkColor).frame(width: 6, height: 6)
-                    Text(linkLine).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                if !(showsAll && store.hasMultiplePrinters) {
+                    HStack(spacing: 5) {
+                        Circle().fill(linkColor).frame(width: 6, height: 6)
+                        Text(linkLine).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
             }
             Spacer(minLength: 8)
+            if store.hasMultiplePrinters {
+                Button { showsAll.toggle() } label: { Image(systemName: showsAll ? "square.grid.2x2.fill" : "square.grid.2x2") }
+                    .buttonStyle(HeaderIconStyle())
+                    .help(showsAll ? "Show one printer" : "Show all printers")
+            }
             if store.isConfigured {
                 RefreshControl(compact: true)
             }
@@ -106,9 +135,7 @@ struct MenuPanel: View {
 
     private func temperatures(_ s: PrinterStatus) -> some View {
         HStack(spacing: 8) {
-            TemperatureTile(title: "Nozzle", symbol: "flame.fill", temperature: s.nozzle, tint: Palette.nozzle, maxValue: 300)
-            TemperatureTile(title: "Bed", symbol: "heat.waves", temperature: s.bed, tint: Palette.bed, maxValue: 110)
-            TemperatureTile(title: "Chamber", symbol: "thermometer.medium", temperature: nil, plain: s.chamber, tint: Palette.chamber, maxValue: 65)
+            TemperatureTiles(status: s, model: store.config?.model)
         }
     }
 
@@ -138,9 +165,8 @@ struct JobHero: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: compact ? 12 : 22) {
-            art
+            PrinterModelView(art: art)
                 .frame(width: compact ? 92 : 190, height: compact ? 110 : 228)
-                .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
             VStack(alignment: .leading, spacing: compact ? 6 : 10) {
                 StatePill(state: status.state, text: pillText ?? status.stateTitle, compact: compact, color: Palette.color(for: status))
                 if status.state == .idle {
@@ -417,13 +443,16 @@ struct FilamentStrip: View {
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(spool.isLoaded ? .primary : .tertiary)
                 .lineLimit(1)
-            Text(spool.isLoaded ? spool.remainText : "Empty")
+            Text(spool.isLoaded ? spool.amountText : "Empty")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
         .frame(maxWidth: .infinity)
-        .help(spool.isLoaded ? "\(spool.label): \(spool.displayName), \(spool.remainText) left" : "\(spool.label): empty")
+        .help(!spool.isLoaded ? "\(spool.label): empty"
+              : "\(spool.label): " + [[spool.brand, spool.displayName].compactMap { $0 }.joined(separator: " "),
+                                     spool.colorName, spool.remain == nil ? nil : "\(spool.remainDetail) left"]
+                .compactMap { $0 }.joined(separator: ", "))
     }
 }
 
@@ -590,6 +619,27 @@ struct IssueBanner: View {
             Spacer(minLength: 0)
         }
         .panel(radius: 14, padding: 11, tint: color)
+    }
+}
+
+/// A newer release, one line above the footer.
+struct UpdateRow: View {
+    var release: UpdateChecker.Release
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Palette.accent)
+            Text("Bambu Bar \(release.version) is available").font(.system(size: 11.5, weight: .medium))
+            Spacer(minLength: 0)
+            Button("Later") { UpdateChecker.shared.dismissOffer() }
+                .buttonStyle(.borderless).controlSize(.small).foregroundStyle(.secondary)
+            Button("Download") {
+                UpdateChecker.shared.download(release)
+                UpdateChecker.shared.dismissOffer()
+            }
+            .controlSize(.small)
+        }
+        .panel(radius: 12, padding: 10)
     }
 }
 

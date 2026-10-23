@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// `--demo printing --readme-frames <dir>` renders the README animations frame by frame from scripted demo data
+/// `--demo printing --fleet --readme-frames <dir>` renders the README animations frame by frame from scripted demo data
 /// (no printer, no network, nothing saved), then quits. `scripts/make-readme-animations.sh` turns the frames into
 /// animated WebP.
 ///
@@ -20,6 +20,9 @@ enum ReadmeFrames {
     static let fps = 15.0
     /// Today at 9:41, the time the menu bar shows.
     private static let start: Date = Calendar.current.date(bySettingHour: 9, minute: 41, second: 0, of: Date()) ?? Date()
+
+    /// Seconds into the animation at a frame's clock.
+    static func elapsed(_ clock: Date) -> TimeInterval { clock.timeIntervalSince(start) }
     private static var window: NSWindow?
 
     static func run(into dir: URL) {
@@ -67,30 +70,43 @@ enum ReadmeFrames {
 
     private static func renderMenuBar(into dir: URL, store: PrinterStore, session: PrinterSession) {
         let size = CGSize(width: 600, height: 700)
-        let frames = Int(8 * fps)
+        let frames = Int(10 * fps)
         for i in 0..<frames {
             let t = Double(i) / fps
             session.showDemoStatus(status(at: t, pauseAt: 5.0))
             let clock = start.addingTimeInterval(t)
-            save(MenuBarScene(store: store, size: size, clock: clock).environment(\.demoClock, clock), size: size, scale: 1.6,
-                 to: dir, index: i)
+            // The last stretch shows every printer, as the panel's grid button does.
+            let all = store.hasMultiplePrinters && t >= 7.6
+            save(MenuBarScene(store: store, size: size, clock: clock, showsAll: all).environment(\.demoClock, clock), size: size,
+                 scale: 1.6, to: dir, index: i)
         }
     }
 
     // MARK: - Window
 
+    /// A tour of the window: the printer page with its 3D model, the filament page, every printer, then back to
+    /// the start so the loop is seamless.
     private static func renderWindow(into dir: URL, store: PrinterStore, session: PrinterSession) {
         let windowSize = CGSize(width: 1000, height: 660)
         let size = CGSize(width: windowSize.width + 56, height: windowSize.height + 56)
-        let frames = Int(7 * fps)
-        Navigation.shared.section = .overview
-        for i in 0..<frames {
+        var stops: [(AppSection, Double)] = [(.overview, 5.2), (.filament, 3.8)]
+        if store.hasMultiplePrinters { stops.append((.fleet, 3.8)) }
+        let fade = 0.45
+        let total = stops.reduce(0) { $0 + $1.1 }
+        for i in 0..<Int(total * fps) {
             let t = Double(i) / fps
             session.showDemoStatus(status(at: t, pauseAt: nil))
             let clock = start.addingTimeInterval(t)
+            // Which stop, and how far into the fade to the next one (the last fades back to the first).
+            var begin = 0.0, index = 0
+            while index < stops.count - 1 && t >= begin + stops[index].1 { begin += stops[index].1; index += 1 }
+            let local = t - begin
+            let next = stops[(index + 1) % stops.count].0
+            let blend = max(0, min(1, (local - (stops[index].1 - fade)) / fade))
+            let e = blend * blend * (3 - 2 * blend)
             let view = ZStack {
                 DesktopBackdrop()
-                ReadmeWindow(store: store)
+                ReadmeWindow(store: store, section: stops[index].0, next: next, blend: e)
                     .frame(width: windowSize.width, height: windowSize.height)
                     .overlay(alignment: .topLeading) { TrafficLights().padding(.leading, 20).padding(.top, 19) }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -190,6 +206,7 @@ private struct MenuBarScene: View {
     let store: PrinterStore
     let size: CGSize
     let clock: Date
+    var showsAll = false
 
     private let barHeight: CGFloat = 26
     private let panelOrigin = CGPoint(x: 196, y: 32)
@@ -245,7 +262,7 @@ private struct MenuBarScene: View {
 
     /// The panel on dark glass over the desktop, like the real menu bar window.
     private var panel: some View {
-        MenuPanel()
+        MenuPanel(showsAllOverride: showsAll)
             .environment(store)
             .environment(\.plainPanel, true)
             // The desktop behind is all soft gradients, so translucent dark glass over it reads as the real panel.
@@ -367,22 +384,22 @@ private struct WidgetStageFrame: View {
     }
 }
 
-/// The main window for the README: the Printer page beside a drawn copy of the sidebar (the real sidebar's
-/// material doesn't render offscreen).
+/// The main window for the README: a page (crossfading into the next) beside a drawn copy of the sidebar (the
+/// real sidebar's material doesn't render offscreen).
 private struct ReadmeWindow: View {
     let store: PrinterStore
+    let section: AppSection
+    var next: AppSection
+    /// 0 shows `section`, 1 shows `next`.
+    var blend: Double
 
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            ScrollView {
-                OverviewPage()
-                    .frame(maxWidth: 860)
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 24)
-                    .frame(maxWidth: .infinity)
+            ZStack {
+                page(section).opacity(1 - blend)
+                if blend > 0 { page(next).opacity(blend) }
             }
-            .scrollDisabled(true)
             .background(PageBackground(status: store.status))
         }
         .environment(store)
@@ -390,24 +407,46 @@ private struct ReadmeWindow: View {
         .environment(LoginItem.shared)
     }
 
+    private func page(_ section: AppSection) -> some View {
+        ScrollView {
+            Group {
+                switch section {
+                case .fleet: FleetPage()
+                case .filament: FilamentPage()
+                default: OverviewPage()
+                }
+            }
+            .frame(maxWidth: 860)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollDisabled(true)
+    }
+
+    private var selected: AppSection { blend < 0.5 ? section : next }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 2) {
             Color.clear.frame(height: 44)
-            ForEach([AppSection.overview, .filament, .widgets]) { row($0) }
-            Color.clear.frame(height: 14)
-            ForEach([AppSection.settings, .about]) { row($0) }
-            Spacer()
-            HStack(spacing: 10) {
-                PrinterArt(status: store.status, model: store.config?.modelName, animated: false)
-                    .frame(width: 26, height: 31)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(store.printerName).font(.system(size: 12, weight: .semibold))
-                    Text(store.status.map { "\($0.state.title) · \($0.progress)%" } ?? "")
-                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                }
+            if store.hasMultiplePrinters {
+                picker.padding(.horizontal, 12).padding(.bottom, 8)
             }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 14)
+            ForEach(AppSection.allCases.filter { $0 != .fleet || store.hasMultiplePrinters }) { row($0) }
+            Spacer()
+            if !store.hasMultiplePrinters {
+                HStack(spacing: 10) {
+                    PrinterArt(status: store.status, model: store.config?.modelName, animated: false)
+                        .frame(width: 26, height: 31)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(store.printerName).font(.system(size: 12, weight: .semibold))
+                        Text(store.status.map { "\($0.state.title) · \($0.progress)%" } ?? "")
+                            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+            }
         }
         .frame(width: 210)
         .frame(maxHeight: .infinity)
@@ -415,19 +454,40 @@ private struct ReadmeWindow: View {
         .overlay(alignment: .trailing) { Rectangle().fill(.white.opacity(0.06)).frame(width: 1) }
     }
 
+    /// The printer switcher at the top of the sidebar, as `SidebarPrinterPicker` draws it.
+    private var picker: some View {
+        HStack(spacing: 10) {
+            PrinterArt(status: store.status, model: store.config?.modelName, animated: false)
+                .frame(width: 26, height: 31)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(store.printerName).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
+                HStack(spacing: 4) {
+                    Circle().fill(store.status.map(Palette.color(for:)) ?? .secondary).frame(width: 7, height: 7)
+                    Text(store.status.map { "\($0.state.title) · \($0.progress)%" } ?? "")
+                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.06)))
+    }
+
     private func row(_ section: AppSection) -> some View {
-        let selected = section == .overview
+        let isSelected = section == selected
         return HStack(spacing: 8) {
             Image(systemName: section.icon)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(selected ? .white : Color.accentColor)
+                .foregroundStyle(isSelected ? .white : Color.accentColor)
                 .frame(width: 20)
             Text(section.title).font(.system(size: 13, weight: .medium))
             Spacer()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selected ? Color.accentColor : .clear))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(isSelected ? Color.accentColor : .clear))
         .padding(.horizontal, 10)
     }
 }
