@@ -21,6 +21,9 @@ struct FilamentPage: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                             ForEach(unit.spools) { SpoolCard(spool: $0, active: $0.id == status.activeSpoolID && status.state.isActive) }
                         }
+                        if unit.kind.canDry, let session = store.current {
+                            DryingPanel(session: session, unit: unit)
+                        }
                     }
                 }
                 if let ext = status.externalSpool {
@@ -52,8 +55,9 @@ struct FilamentPage: View {
     @ViewBuilder
     private func climate(_ unit: AMSUnit) -> some View {
         HStack(spacing: 14) {
-            if unit.dryingMinutesLeft > 0 {
-                Label("Drying · \(Format.duration(minutes: unit.dryingMinutesLeft)) left", systemImage: "sun.max.fill")
+            if unit.isDrying {
+                Label(unit.dryingMinutesLeft > 0 ? "Drying · \(Format.duration(minutes: unit.dryingMinutesLeft)) left" : "Drying",
+                      systemImage: "sun.max.fill")
                     .foregroundStyle(Palette.bed)
             }
             if let h = unit.humidity {

@@ -422,7 +422,11 @@ struct FilamentStrip: View {
 
     private func climate(_ unit: AMSUnit) -> String? {
         var parts: [String] = []
-        if unit.dryingMinutesLeft > 0 { parts.append("Drying · \(Format.duration(minutes: unit.dryingMinutesLeft))") }
+        if unit.isDrying {
+            parts.append(unit.dryingMinutesLeft > 0 ? "Drying · \(Format.duration(minutes: unit.dryingMinutesLeft))" : "Drying")
+        } else if unit.dryingPhase == .cooling {
+            parts.append("Cooling")
+        }
         if let h = unit.humidity { parts.append("\(h)% RH") } else if let level = unit.humidityLevel { parts.append("Humidity \(level)/5") }
         if let t = unit.temperature { parts.append(Format.temperature(t)) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

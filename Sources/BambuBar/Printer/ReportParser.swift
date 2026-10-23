@@ -144,6 +144,9 @@ enum ReportParser {
         if let fun = string(p["fun"]), let bits = UInt64(fun, radix: 16) {
             s.controlsLocked = bits & 0x2000_0000 != 0
         }
+        if let fun2 = string(p["fun2"]) {
+            s.supportsRemoteDrying = flag(fun2, bit: 5)
+        }
         s.hasSDCard = p["sdcard"] as? Bool
         s.plateIndex = int(p["plate_idx"])
         if let ipcam = p["ipcam"] as? [String: Any], let url = string(ipcam["rtsp_url"]) {
@@ -174,6 +177,7 @@ enum ReportParser {
         let units = (amsRoot?["ams"] as? [[String: Any]]) ?? []
         let existBits = string(amsRoot?["tray_exist_bits"]).flatMap { UInt64($0, radix: 16) }
         let rfidBits = string(amsRoot?["tray_is_bbl_bits"]).flatMap { UInt64($0, radix: 16) }
+        let remoteDry = string(p["fun2"]).map { flag($0, bit: 5) } ?? false
         s.ams = units.compactMap { u -> AMSUnit? in
             guard let id = int(u["id"]) else { return nil }
             let kind = amsKind(id: id, info: string(u["info"]), modules: doc.modules)
@@ -195,8 +199,23 @@ enum ReportParser {
             if let l = level, l < 1 || l > 5 { level = nil }
             var temp = double(u["temp"])
             if let t = temp, t <= 0 || t > 100 { temp = nil }
-            return AMSUnit(id: id, kind: kind, humidity: humidity, humidityLevel: level.map { 6 - $0 }, temperature: temp,
-                           dryingMinutesLeft: int(u["dry_time"]) ?? 0, spools: spools)
+            var unit = AMSUnit(id: id, kind: kind, humidity: humidity, humidityLevel: level.map { 6 - $0 }, temperature: temp,
+                               dryingMinutesLeft: max(0, int(u["dry_time"]) ?? 0), spools: spools)
+            // Bambu Studio trusts these fields only on firmware that advertises remote drying.
+            if remoteDry && kind.canDry {
+                if let info = string(u["info"]), let bits = UInt64(info, radix: 16) {
+                    unit.dryingPhase = DryingPhase(rawValue: Int((bits >> 4) & 0xF)) ?? .error
+                }
+                if let d = u["dry_setting"] as? [String: Any] {
+                    unit.dryingSetting = DryingSetting(filament: string(d["dry_filament"]) ?? "",
+                                                       temperature: int(d["dry_temperature"]) ?? 0,
+                                                       hours: int(d["dry_duration"]) ?? 0)
+                }
+                if let reasons = u["dry_sf_reason"] as? [Any] {
+                    unit.dryingBlockers = reasons.compactMap { int($0) }.map(DryingBlocker.init(code:))
+                }
+            }
+            return unit
         }.sorted { $0.id < $1.id }
 
         let virtual = (p["vir_slot"] as? [[String: Any]])?.first ?? (p["vt_tray"] as? [String: Any])
@@ -251,6 +270,9 @@ enum ReportParser {
         if let low = int(t["nozzle_temp_min"]), let high = int(t["nozzle_temp_max"]), low > 0, high >= low {
             spool.nozzleRange = low...high
         }
+        // The RFID tag's drying recipe; "0" means the tag (or the slot) has none.
+        spool.dryingTemp = int(t["drying_temp"]).flatMap { $0 > 0 ? $0 : nil }
+        spool.dryingHours = int(t["drying_time"]).flatMap { $0 > 0 ? $0 : nil }
         return spool
     }
 
@@ -340,6 +362,16 @@ enum ReportParser {
         // Bambu Studio turns spaces into underscores when it names the job after the project file.
         if !n.contains(" ") { n = n.replacingOccurrences(of: "_", with: " ") }
         return n
+    }
+
+    /// One bit of a hex flag string that can be longer than 64 bits (`fun2`), counted from the right.
+    static func flag(_ hex: String, bit: Int) -> Bool {
+        var digits = hex.trimmingCharacters(in: .whitespaces)
+        if digits.lowercased().hasPrefix("0x") { digits.removeFirst(2) }
+        let nibbles = Array(digits.filter(\.isHexDigit))
+        let index = nibbles.count - 1 - bit / 4
+        guard index >= 0, let value = nibbles[index].hexDigitValue else { return false }
+        return value & (1 << (bit % 4)) != 0
     }
 
     private static func unpack(_ packed: Int) -> Temperature {

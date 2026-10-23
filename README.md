@@ -32,6 +32,7 @@ It talks to the printer directly over your network, the same way Bambu Studio do
 | **Grams left** | Bambu Lab spools tell the AMS their net weight, so Bambu Bar shows filament left in grams (≈ 810 g), not just a percentage, and how much you have on hand in total. |
 | **Named filament** | Bambu Lab spools show their colour by name (Grass Green, Charcoal). Other spools show the maker and product of the preset you set the slot to on the printer or in Bambu Studio, such as SUNLU PLA Matte. |
 | **Controls** | Pause, resume, stop (with a confirmation), print speed (Silent, Standard, Sport, Ludicrous) and a chamber light switch. |
+| **AMS drying** | Start and stop the dryer of an AMS 2 Pro or AMS HT, at the temperature and time the spools' RFID tags ask for. Smart drying starts it when the humidity climbs past a level you pick, stops it once it's low enough, and can keep to set hours and days. |
 | **3D printer models** | Each printer family is modelled in Blender: the P2S/P1S/X1 enclosure, the wider dual-nozzle H2, the open P1P frame, the A1's arch with its AMS Lite, the A1 mini. In the app it's a live 3D model you can turn with the mouse: the print grows layer by layer in the filament's colour, the bed drops (or the A1's gantry rises) as it goes, the toolhead moves while printing, the AMS spools take their real colours and the chamber light follows the printer's. Widgets use studio renders of the same models. |
 | **Knows your model** | What each model has comes from the printer profiles Bambu Lab publishes with Bambu Studio, so you only see what your printer can report: no chamber temperature on an A1 or P1S, no door or chamber light on the A series, both nozzles on an H2D, heated-chamber targets on the H2 and X1E, and the build volume and fans on the Printer page. |
 | **Window** | A larger view plus fans, nozzle, door, network, storage and firmware; a Filament page with every spool; a Widgets page that tours every widget size and state. |
@@ -67,6 +68,19 @@ Builds on the [Releases](https://github.com/rolottr/bambu-bar/releases) page are
 ### Controlling prints
 
 Reading status works in any mode. Pause, resume, stop and speed changes are accepted only when the printer is in **LAN Only** mode with **Developer Mode** on (printer screen → Settings → Network). That's Bambu Lab's rule for third-party apps; without it the printer refuses the command and Bambu Bar says so (the buttons show a lock). The chamber light works either way.
+
+### Drying filament
+
+The Filament page has a drying card under each AMS 2 Pro and AMS HT. **Start Drying** uses the drying temperature and time from the loaded spools' RFID tags (the most heat-sensitive spool sets the temperature), or the usual numbers for the material when a spool has no tag, within the unit's limits (45–65 °C for the AMS 2 Pro, 45–85 °C for the AMS HT).
+
+**Smart drying** watches the humidity and acts on its own while Bambu Bar is running (turn on Open at Login to keep it going):
+
+- It starts once the humidity has stayed above your *start* level for 10 minutes, and stops the cycle once it has stayed at your *stop* level for 5 minutes. The AMS reads low while it's warm, so set the stop level a few points below what you want. Cycles also end on their own when the tag's drying time runs out.
+- Optionally it dries only between two times on the days you pick (overnight windows work), and stops a cycle when the window closes.
+- It waits for prints to finish unless you allow drying while printing, and rests an hour after each cycle so the reading can settle.
+- It never stops a cycle you started yourself.
+
+Drying commands need **LAN Only** with **Developer Mode** like the other controls, and firmware that takes remote drying, the same feature Bambu Studio 2.5 uses on its Device page (recent H2 and P2S firmware has it). The printer says whether it does in its report (`fun2`); without it (the P1 series on 01.10.00.00, for one) the card shows the time left, drying has to be started on the printer's screen, and smart drying turns into reminders: the same rules send a notification when it's time to start drying and when the humidity is low enough to stop. `defaults write dev.rolottr.BambuBar forceRemoteDrying -bool YES` sends the commands anyway, for testing other firmware.
 
 ## Desktop widgets
 
@@ -143,11 +157,11 @@ The [GitHub Actions workflow](.github/workflows/build.yml) builds and uploads an
 ### Developing without a printer
 
 - `--demo [printing|preparing|paused|finished|failed|idle|offline|unconfigured]` runs a simulated P2S; add `--fleet` for six printers. Nothing is saved and no network is used.
-- `scripts/emulator/printer.py` runs a pretend P2S on `127.0.0.1:8883` (needs `brew install mosquitto`): a TLS MQTT broker that replays a real P2S report, then prints, heats and obeys pause, resume, stop, speed and light. Connect with
+- `scripts/emulator/printer.py` runs a pretend P2S on `127.0.0.1:8883` (needs `brew install mosquitto`): a TLS MQTT broker that replays a real P2S report, then prints, heats and obeys pause, resume, stop, speed, light and AMS drying. Connect with
   `"build/App.noindex/Bambu Bar.app/Contents/MacOS/Bambu Bar" --connect 127.0.0.1 22E00EMULATOR0 12345678 --insecure-tls`
 - `--connect <ip> <serial> <access-code> [--model <code>]` works with real printers too, saving nothing; `--model C12` (P1S), `BL-P001` (X1C) and so on set the model, which picks the 3D model, what it can report and the camera transport (default `N7`, the P2S).
 - `scripts/fleet/run.sh` starts a mock fleet of 12 printers in Docker (P2S, P1S, P1P, X1C, X1E, H2D, H2S, H2C, A1, A1 mini; printing, paused, failed, finished, idle and one switched off) and opens Bambu Bar against it with `--emulator`. Add `--import` to start on the Add Printer page and try **Add All**, `SSDP=1` to have the printers announce their names and models, `--stop` to stop it. The fleet writes `scripts/fleet/out/BambuStudio.conf` the way Bambu Studio saves LAN printers. Nothing from an `--emulator` run is saved: not the printers, their codes, the history or the widgets' data.
-- `--probe <ip> <serial> <access-code|keychain> [seconds] [--raw-filament]` connects to a printer from Terminal and prints what it reports (`keychain` uses the code Bambu Bar saved).
+- `--probe <ip> <serial> <access-code|keychain> [seconds] [--raw-filament]` connects to a printer from Terminal and prints what it reports (`keychain` uses the code Bambu Bar saved), including whether it takes remote drying. Add `--dry start <ams id>` or `--dry stop <ams id>` to send a drying command after the first report (pass a longer time, like `--probe <ip> <serial> <code> 60 --dry start 0`, to watch the dryer react).
 - `--probe-camera <ip> <serial> <access-code> [seconds] [--model P1S | --jpeg | --rtsp]` opens the camera from Terminal, logs the handshake (certificate, RTSP replies, SDP) and frame rate, and saves the first decoded frame to `$TMPDIR/bambubar-camera.png`. It assumes RTSPS (a P2S) unless told otherwise.
 - `scripts/showcase.sh <dir>` screenshots the panel, window and widgets in each demo state; `scripts/make-readme-animations.sh` renders the animations above, offscreen, from the demo printer.
 - `scripts/make-hms.py` regenerates the bundled error texts.

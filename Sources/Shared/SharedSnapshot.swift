@@ -107,14 +107,15 @@ extension PrinterStatus {
         s.wifiSignal = -52
         s.ams = [AMSUnit(id: 0, kind: .pro2, humidity: 16, humidityLevel: 1, temperature: 28.4, dryingMinutesLeft: 0, spools: [
             Spool(id: 0, unit: 0, slot: 0, material: "PLA", name: "PLA Matte", color: "E8DBB7FF", colors: ["E8DBB7FF"], remain: 81, weight: 1000,
-                  isLoaded: true, isBambu: true, preset: "GFA01", brand: "Bambu Lab", colorName: "Desert Tan", nozzleRange: 190...230),
+                  isLoaded: true, isBambu: true, preset: "GFA01", brand: "Bambu Lab", colorName: "Desert Tan", nozzleRange: 190...230, dryingTemp: 55, dryingHours: 8),
             Spool(id: 1, unit: 0, slot: 1, material: "PLA", name: "PLA Basic", color: "000000FF", colors: ["000000FF"], remain: 39, weight: 1000,
-                  isLoaded: true, isBambu: true, preset: "GFA00", brand: "Bambu Lab", colorName: "Black", nozzleRange: 190...230),
+                  isLoaded: true, isBambu: true, preset: "GFA00", brand: "Bambu Lab", colorName: "Black", nozzleRange: 190...230, dryingTemp: 55, dryingHours: 8),
             Spool(id: 2, unit: 0, slot: 2, material: "PLA", name: "PLA+", color: "3F8E43FF", colors: ["3F8E43FF"], remain: nil,
                   isLoaded: true, isBambu: false, preset: "GFSNL03", brand: "SUNLU", nozzleRange: 200...230),
             Spool(id: 3, unit: 0, slot: 3, material: "PLA", name: "PLA Silk+", color: "F4A925FF", colors: ["F4A925FF"], remain: 22, weight: 1000,
-                  isLoaded: true, isBambu: true, preset: "GFA06", brand: "Bambu Lab", colorName: "Gold", nozzleRange: 200...240),
-        ])]
+                  isLoaded: true, isBambu: true, preset: "GFA06", brand: "Bambu Lab", colorName: "Gold", nozzleRange: 200...240, dryingTemp: 55, dryingHours: 8),
+        ], dryingPhase: .off, dryingBlockers: [])]
+        s.supportsRemoteDrying = true
         s.activeSpoolID = 3
         s.externalSpool = Spool(id: Spool.externalID, unit: 255, slot: 0, material: "PETG", name: "PETG HF", color: "1F79E5FF",
                                 colors: ["1F79E5FF"], remain: nil, weight: 1000, isLoaded: true, isBambu: true, preset: "GFG02",

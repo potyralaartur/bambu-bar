@@ -14,6 +14,8 @@ final class PrinterSession: Identifiable {
     /// Commands sent but not yet reflected in a report, so the controls respond immediately.
     private(set) var pendingLight: Bool?
     private(set) var pendingSpeed: SpeedLevel?
+    /// AMS id → drying on/off, until the unit's report agrees.
+    private(set) var pendingDrying: [Int: Bool] = [:]
     /// More codes to try if the printer rejects the current one (a slicer may hold an old and a new one).
     var fallbackCodes: [String] = []
     /// False until the first report after connecting, so state already in progress doesn't notify.
@@ -42,7 +44,7 @@ final class PrinterSession: Identifiable {
         connection.onStatus = { [weak self] status, doc in self?.received(status, canceled: ReportParser.wasCanceled(doc)) }
         connection.onAck = { [weak self] command, ok, reason in
             guard let self else { return }
-            if !ok { self.pendingLight = nil; self.pendingSpeed = nil }
+            if !ok { self.pendingLight = nil; self.pendingSpeed = nil; self.pendingDrying = [:] }
             self.onAck?(self, command, ok, reason)
         }
         connection.onHeartbeat = { [weak self] in
@@ -101,6 +103,7 @@ final class PrinterSession: Identifiable {
     var isOnline: Bool { status != nil && (phase == .online || phase == .connecting) }
     var chamberLightOn: Bool { pendingLight ?? status?.chamberLightOn ?? false }
     var speed: SpeedLevel { pendingSpeed ?? status?.speed ?? .standard }
+    func isDrying(_ unit: AMSUnit) -> Bool { pendingDrying[unit.id] ?? unit.isDrying }
     var accessCode: String? { Keychain.accessCode(for: config.serial) }
     var isDemo: Bool { demo != nil }
     var allowsInsecureTLS: Bool { insecure }
@@ -152,13 +155,26 @@ final class PrinterSession: Identifiable {
         clearPendingSoon()
     }
 
-    private func clearPendingSoon() {
+    func startDrying(_ plan: DryingPlan, unit: Int) {
+        pendingDrying[unit] = true
+        if let demo { demo.startDrying(plan, unit: unit) } else { connection.startDrying(plan, unit: unit) }
+        clearPendingSoon(after: 15)
+    }
+
+    func stopDrying(unit: Int) {
+        pendingDrying[unit] = false
+        if let demo { demo.stopDrying(unit: unit) } else { connection.stopDrying(unit: unit) }
+        clearPendingSoon(after: 15)
+    }
+
+    private func clearPendingSoon(after seconds: Double = 6) {
         pendingTask?.cancel()
         pendingTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(6))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             self?.pendingLight = nil
             self?.pendingSpeed = nil
+            self?.pendingDrying = [:]
         }
     }
 
@@ -187,6 +203,7 @@ final class PrinterSession: Identifiable {
         lastHeard = Date()
         if let light = pendingLight, new.chamberLightOn == light { pendingLight = nil }
         if let level = pendingSpeed, new.speed == level { pendingSpeed = nil }
+        for unit in new.ams where pendingDrying[unit.id] == unit.isDrying { pendingDrying[unit.id] = nil }
         onStatus?(self, old, new, canceled)
         hasBaseline = true
         // The camera stays on for the whole of a print.

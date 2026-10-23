@@ -151,6 +151,7 @@ struct SettingsPage: View {
                 toggle("Print failed, canceled or an error", isOn: $store.notifyFailed)
                 toggle("Print paused (filament runout, user)", isOn: $store.notifyPaused)
                 toggle("Print started", isOn: $store.notifyStarted)
+                toggle("Smart drying started or finished", isOn: $store.notifyDrying)
             }
 
             group("Controls", symbol: "slider.horizontal.3") {

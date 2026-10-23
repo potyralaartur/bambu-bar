@@ -80,7 +80,10 @@ class Printer:
         self.report = sample["pushall"]["print"]
         self.version = sample["get_version"]
         self.report.update({"gcode_state": "PREPARE", "stg_cur": 7, "mc_percent": 0, "layer_num": 0, "mc_remaining_time": 95,
-                            "subtask_name": "Planetary Gearbox", "fun": "60029FD183FF9CB7"})  # Developer Mode on
+                            "subtask_name": "Planetary Gearbox", "fun": "60029FD183FF9CB7",  # Developer Mode on
+                            "fun2": "21"})  # bit 5: takes remote drying commands
+        for unit in self.report["ams"]["ams"]:
+            unit["dry_sf_reason"] = []
         self.report["device"]["extruder"]["info"][0]["temp"] = (220 << 16) | 150
         self.report["device"]["bed"]["info"]["temp"] = (55 << 16) | 52
         self.progress = 0.0
@@ -121,14 +124,43 @@ class Printer:
                 self.delta({"gcode_state": "FAILED", "stg_cur": 255, "print_error": 50348044})
             elif cmd == "print_speed":
                 self.delta({"spd_lvl": int(data["print"].get("param", "2"))})
+            elif cmd == "ams_filament_drying":
+                self.set_drying(data["print"])
             self.publish({"print": {"command": cmd, "sequence_id": seq, "result": "success", "reason": ""}})
         elif data.get("system", {}).get("command") == "ledctrl":
             mode = data["system"].get("led_mode", "on")
             self.delta({"lights_report": [{"node": "chamber_light", "mode": mode}, {"node": "work_light", "mode": "flashing"}]})
             self.publish({"system": {**data["system"], "result": "success"}})
 
+    def set_drying(self, p):
+        """`ams_filament_drying`: mode 1 starts a cycle of `duration` hours at `temp`, mode 0 stops it."""
+        ams_id = str(p.get("ams_id", 0))
+        on = p.get("mode", 0) != 0
+        for unit in self.report["ams"]["ams"]:
+            if unit["id"] != ams_id:
+                continue
+            info = (int(unit.get("info", "0"), 16) & ~0xF0) | ((2 if on else 0) << 4)
+            fields = {"id": ams_id, "info": format(info, "X"), "dry_time": int(p.get("duration", 0)) * 60 if on else 0}
+            if on:
+                fields["dry_setting"] = {"dry_filament": p.get("filament", ""), "dry_temperature": p.get("temp", 0),
+                                         "dry_duration": p.get("duration", 0)}
+            self.delta({"ams": {"ams": [fields]}})
+
+    def tick_drying(self):
+        """While a unit dries: a minute off the clock and humidity creeping down every few seconds."""
+        for unit in self.report["ams"]["ams"]:
+            if (int(unit.get("info", "0"), 16) >> 4) & 0xF != 2:
+                continue
+            left = max(0, int(unit.get("dry_time", 0)) - 1)
+            humidity = max(3, int(unit.get("humidity_raw", "20")) - (1 if random.random() < 0.3 else 0))
+            fields = {"id": unit["id"], "dry_time": left, "humidity_raw": str(humidity)}
+            if left == 0:
+                fields["info"] = format(int(unit["info"], 16) & ~0xF0, "X")
+            self.delta({"ams": {"ams": [fields]}})
+
     def tick(self):
         """One second of printing."""
+        self.tick_drying()
         r = self.report
         state = r["gcode_state"]
         nozzle = r["device"]["extruder"]["info"][0]["temp"]
